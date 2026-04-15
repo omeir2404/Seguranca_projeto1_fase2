@@ -11,12 +11,21 @@ SRC_DIR = src
 BIN_DIR = bin
 DIST_DIR = dist
 SERVER_CLASS = main.server.SpertaServer
-SERVER_ARGS = 2223
+KEYTOOL = keytool
+SERVER_KEYSTORE = serverkeystore.jks
+SERVER_CERT = server-cert.pem
+CLIENT_TRUSTSTORE = clienttruststore.jks
+SERVER_KEYSTORE_PASS = keystorepass
+CLIENT_TRUSTSTORE_PASS = truststorepass
+SERVER_CERT_ALIAS = sperta-server
+SERVER_CERT_DNAME = CN=localhost, OU=SC, O=FCUL, L=Lisbon, ST=Lisbon, C=PT
+SERVER_CERT_SAN = dns:localhost,ip:127.0.0.1
+SERVER_ARGS = 2223 cipherpass serverkeystore.jks keystorepass
 CLIENT_CLASS = main.client.SpertaClient
-CLIENT_ARGS = 127.0.0.1:2223 Nexus ehBueFixe
-CLIENT_ARGS2 = 127.0.0.1:2223 Eclipse ATuaMae
-CLIENT_WRONG_ARGS = 127.0.0.1:2223 Nexus Eclipsew
-CLIENT_ARGS_NO_PORT = 127.0.0.1 Nexus ehBueFixe
+CLIENT_ARGS = localhost:2223 clienttruststore.jks truststorepass Nexus ehBueFixe
+CLIENT_ARGS2 = localhost:2223 clienttruststore.jks truststorepass Eclipse ATuaMae
+CLIENT_WRONG_ARGS = localhost:2223 clienttruststore.jks truststorepass Nexus Eclipsew
+CLIENT_ARGS_NO_PORT = localhost clienttruststore.jks truststorepass Nexus ehBueFixe
 
 
 compile:
@@ -34,6 +43,13 @@ compile_client:
 
 compile_server:
 	@$(JAVAC) -d $(BIN_DIR) $(SRC_DIR)/main/server/*.java 
+
+certs:
+	@rm -f $(SERVER_KEYSTORE) $(SERVER_CERT) $(CLIENT_TRUSTSTORE)
+	@$(KEYTOOL) -genkeypair -alias $(SERVER_CERT_ALIAS) -keyalg RSA -keysize 2048 -validity 3650 -keystore $(SERVER_KEYSTORE) -storepass $(SERVER_KEYSTORE_PASS) -keypass $(SERVER_KEYSTORE_PASS) -dname "$(SERVER_CERT_DNAME)" -ext SAN=$(SERVER_CERT_SAN)
+	@$(KEYTOOL) -exportcert -alias $(SERVER_CERT_ALIAS) -keystore $(SERVER_KEYSTORE) -storepass $(SERVER_KEYSTORE_PASS) -rfc -file $(SERVER_CERT)
+	@$(KEYTOOL) -importcert -alias $(SERVER_CERT_ALIAS) -file $(SERVER_CERT) -keystore $(CLIENT_TRUSTSTORE) -storepass $(CLIENT_TRUSTSTORE_PASS) -noprompt
+	@echo "TLS materials updated: $(SERVER_KEYSTORE), $(SERVER_CERT), $(CLIENT_TRUSTSTORE)"
 
 server: compile
 	$(JAVA) -cp $(BIN_DIR) $(SERVER_CLASS) $(SERVER_ARGS)
@@ -68,10 +84,10 @@ createJARs: createServerJAR createClientJar
 
 
 serverJAR: createServerJAR
-	java -jar $(DIST_DIR)/SpertaServer.jar 22345
+	java -jar $(DIST_DIR)/SpertaServer.jar 22345 cipherpass serverkeystore.jks keystorepass
 
 clientJAR: createClientJar
-	@echo "Uso: java -jar $(DIST_DIR)/SpertaClient.jar 127.0.0.1:22345 <user-id> <password>"
+	@echo "Uso: java -jar $(DIST_DIR)/SpertaClient.jar localhost:22345 <truststore> <password-truststore> <user-id> <password>"
 
 
 clean:

@@ -17,7 +17,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
-
+import javax.net.ssl.SSLParameters;
+import javax.net.ssl.SSLSocket;
+import javax.net.ssl.SSLSocketFactory;
 public class ClientNetwork {
 
     Socket clientSocket;
@@ -101,15 +103,31 @@ public class ClientNetwork {
 
 
     // init socket and streams
-    public boolean initClientNetwork(String host, int port) {
-        try{
-            clientSocket = new Socket(host, port);
+    public boolean initClientNetwork(String host, int port, String truststorePath, String truststorePass) {
+        try {
+            // Set the system properties so TLS knows where to find the server's certificate
+            System.setProperty("javax.net.ssl.trustStore", truststorePath);
+            System.setProperty("javax.net.ssl.trustStorePassword", truststorePass);
+
+            // Create the SSLSocket
+            SSLSocketFactory factory = (SSLSocketFactory) SSLSocketFactory.getDefault();
+            SSLSocket sslSocket = (SSLSocket) factory.createSocket(host, port);
+
+            // Validate that the certificate matches the requested hostname.
+            SSLParameters sslParameters = sslSocket.getSSLParameters();
+            sslParameters.setEndpointIdentificationAlgorithm("HTTPS");
+            sslSocket.setSSLParameters(sslParameters);
+            clientSocket = sslSocket;
+
+            // Explicitly start the handshake (optional, but good for error catching)
+            sslSocket.startHandshake();
+
             out = new ObjectOutputStream(clientSocket.getOutputStream());
             in = new ObjectInputStream(clientSocket.getInputStream());
 
             return true;
-        } catch (Exception e){
-            e.printStackTrace();
+        } catch (Exception e) {
+            System.err.println("Erro na ligação TLS: " + e.getMessage());
             return false;
         }
     }
@@ -117,9 +135,15 @@ public class ClientNetwork {
     // close resources
     public boolean closeClientNetwork(){
         try{
-            out.close();
-            in.close();
-            clientSocket.close();
+            if (out != null) {
+                out.close();
+            }
+            if (in != null) {
+                in.close();
+            }
+            if (clientSocket != null) {
+                clientSocket.close();
+            }
             return true;
         } catch (Exception e){
             e.printStackTrace();

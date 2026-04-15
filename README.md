@@ -10,7 +10,7 @@
 
 Projeto da disciplina de Segurança e Confiabilidade (2025/2026).
 
-Este trabalho implementa um sistema de casas inteligentes em arquitetura cliente-servidor TCP:
+Este trabalho implementa um sistema de casas inteligentes em arquitetura cliente-servidor sobre TLS/SSL:
 - `SpertaServer`: gere autenticação, permissões, estado e histórico dos dispositivos.
 - `SpertaClient`: autentica no servidor, envia comandos e recebe dados/ficheiros.
 
@@ -19,7 +19,7 @@ O objetivo desta fase é focar funcionalidades e persistência.
 ## Arquitetura
 
 - Linguagem: Java
-- Transporte: TCP sockets
+- Transporte: TLS/SSL sockets
 - Protocolo aplicacional: objetos Java para comandos/respostas + stream binária para transferência de ficheiros (`RT` e `RH`)
 - Multi-cliente: servidor aceita clientes em simultâneo (1 thread por cliente)
 
@@ -27,8 +27,8 @@ O objetivo desta fase é focar funcionalidades e persistência.
 
 ### Sintaxe esperada
 
-- Servidor: `SpertaServer [port]`
-- Cliente: `SpertaClient <serverAddress> <user-id> <password>`
+- Servidor: `SpertaServer [port] <password-cifra> <keystore> <password-keystore>`
+- Cliente: `SpertaClient <serverAddress> <truststore> <password-truststore> <user-id> <password>`
 
 `serverAddress` aceita formato `<ip-ou-hostname>[:porto]`.
 Se o porto não for indicado, cliente e servidor usam por omissão `22345`.
@@ -89,7 +89,7 @@ make serverJAR
 Executar cliente pelo JAR (substituir pelos teus valores):
 
 ```bash
-java -jar dist/SpertaClient.jar 127.0.0.1:22345 Nexus ehBueFixe
+java -jar dist/SpertaClient.jar localhost:22345 clienttruststore.jks truststorepass Nexus ehBueFixe
 ```
 
 ### Compilação manual (alternativa)
@@ -101,13 +101,13 @@ javac -d bin src/main/server/*.java src/main/client/*.java
 Servidor:
 
 ```bash
-java -cp bin main.server.SpertaServer 22345
+java -cp bin main.server.SpertaServer 22345 cipherpass serverkeystore.jks keystorepass
 ```
 
 Cliente:
 
 ```bash
-java -cp bin main.client.SpertaClient 127.0.0.1:22345 Nexus ehBueFixe
+java -cp bin main.client.SpertaClient localhost:22345 clienttruststore.jks truststorepass Nexus ehBueFixe
 ```
 
 ## Fluxo de autenticação e atestação
@@ -251,7 +251,7 @@ client_data/
 
 ## Estrutura de código
 
-- `src/main/server/SpertaServer.java`: servidor TCP, atestação, autenticação, gestão de clientes.
+- `src/main/server/SpertaServer.java`: servidor TLS, atestação, autenticação, gestão de clientes.
 - `src/main/server/ServerCommandHandler.java`: lógica de comandos (`CREATE`, `ADD`, `RD`, `EC`, `RT`, `RH`, `LS`).
 - `src/main/server/ServerFileManager.java`: leitura/escrita e preparação da persistência.
 - `src/main/server/ServerNetwork.java`: envio/receção de objetos e ficheiros no servidor.

@@ -10,8 +10,13 @@ package main.server;
 import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+
+import javax.net.ssl.SSLServerSocket;
+import javax.net.ssl.SSLServerSocketFactory;
 
 public class SpertaServer extends Thread {
 
@@ -29,6 +34,11 @@ public class SpertaServer extends Thread {
 	private static Set<String> activeUsers;
     private static ServerFileManager fileManager;
 
+
+	private static String cipherPassword;
+	private static String keystorePath;
+	private static String keystorePass;
+
     // ============ INITIALIZATION METHODS ============
 
     private static void initializeFileManager() {
@@ -39,16 +49,9 @@ public class SpertaServer extends Thread {
 		fileManager.ensurePersistenceStructure();
 	}
 
-    private static int validateInput(String[] args) {
-        if (args.length > 1) {
-            System.out.println("Input Inválido: SpertaServer [port]");
-            System.exit(-1);
-        }
-        if (args.length == 0) {
-            return 0;
-        }
+    private static int validatePort(String portValue) {
         try {
-            int port = Integer.parseInt(args[0]);
+            int port = Integer.parseInt(portValue);
             if (port < MIN_PORT || port > MAX_PORT) {
                 System.err.println("A porta tem de estar entre " + MIN_PORT + " e " + MAX_PORT + ".");
                 System.exit(-1);
@@ -72,14 +75,25 @@ public class SpertaServer extends Thread {
     // ============ MAIN ENTRY POINT ============
 
     public static void main(String[] args) {
-        int port = validateInput(args);
+        if (args.length != 3 && args.length != 4) {
+            System.out.println("Usage: SpertaServer [port] <password-cifra> <keystore> <password-keystore>");
+            System.exit(-1);
+        }
+
+        int port = DEFAULT_PORT;
+        int firstCredentialArg = 0;
+        if (args.length == 4) {
+            port = validatePort(args[0]);
+            firstCredentialArg = 1;
+        }
+
         initializeFileManager();
 		verifyPersistenceStructure();
         initialize_server_vars();
 
-        if (port == 0) {
-            port = DEFAULT_PORT;
-        }
+		cipherPassword = args[firstCredentialArg]; // Used for PBE AES-128 file encryption [cite: 82]
+		keystorePath = args[firstCredentialArg + 1];   // Path to server's keystore [cite: 104]
+		keystorePass = args[firstCredentialArg + 2];
 
         SpertaServer server = new SpertaServer();
         Runtime.getRuntime().addShutdownHook(new Thread(new Runnable() {
@@ -94,31 +108,34 @@ public class SpertaServer extends Thread {
 
     // ============ SERVER MANAGEMENT METHODS ============
 
-    public void startServer(int port) {
-        System.out.println("À espera de clientes...");
+	public void startServer(int port) {
+		Path keystore = Path.of(keystorePath);
+		if (!Files.isRegularFile(keystore) || !Files.isReadable(keystore)) {
+			System.err.println("Erro TLS: keystore não encontrado ou sem permissões de leitura: " + keystore.toAbsolutePath());
+			System.exit(-1);
+		}
 
-        try {
-            serverSocket = new ServerSocket(port);
-        } catch (IOException e) {
-            System.err.println(e.getMessage());
-            System.exit(-1);
-        }
+		// Configure system properties for TLS [cite: 128]
+		System.setProperty("javax.net.ssl.keyStore", keystorePath);
+		System.setProperty("javax.net.ssl.keyStorePassword", keystorePass);
 
-        while(running){
-            try{
+		try {
+			SSLServerSocketFactory ssf = (SSLServerSocketFactory) SSLServerSocketFactory.getDefault();
+			serverSocket = (SSLServerSocket) ssf.createServerSocket(port);
+			System.out.println("Servidor Seguro (TLS) à espera de clientes...");
+			
+			while(running) {
 				Socket clientSocket = serverSocket.accept();
-                System.out.println("Nova conexão de: " + clientSocket.getInetAddress().getHostAddress());
-				ClientHandler clientHandler = new ClientHandler(clientSocket);
-				clientHandler.start();
-            }catch(IOException e){
-                if(running){
-                    System.err.println("Erro na conexão: " + e.getMessage());
-                }
-            }
-                
-        }
-  
-    }
+				new ClientHandler(clientSocket).start();
+			}
+		} catch (IOException e) {
+			System.err.println("Erro TLS: " + e.getMessage());
+			System.exit(-1);
+		} catch (Exception e) {
+			System.err.println("Erro TLS ao inicializar keystore/certificado: " + e.getMessage());
+			System.exit(-1);
+		}
+	}
 
     public void closeServer() {
         running = false;

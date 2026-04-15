@@ -74,23 +74,27 @@ public class SpertaClient {
 
 
     public static void main(String[] args) {
-        if (args.length != 3){
-            System.err.println("Uso: SpertaClient <serverAddress> <user-id> <password>");
+        if (args.length != 5){
+            System.err.println("Uso: SpertaClient <serverAddress> <truststore> <password-truststore> <user-id> <password>");
             System.exit(-1);
         }
         
         ServerAddress server = validateServerAddress(args[0]);
-        String userId = args[1];
-        String password = args[2];
+        String truststorePath = args[1];
+        String truststorePassword = args[2];
+        String userId = args[3];
+        String password = args[4];
         
-        if (userId.isEmpty() || password.isEmpty()) {
-            System.err.println("User-id e password não podem estar vazios.");
+        if (truststorePath.isEmpty() || truststorePassword.isEmpty() || userId.isEmpty() || password.isEmpty()) {
+            System.err.println("Truststore, password-truststore, user-id e password não podem estar vazios.");
             System.exit(-1);
         }
 
         SpertaClient client = new SpertaClient();
         network = new ClientNetwork();
-        network.initClientNetwork(server.host, server.port);
+        if (!network.initClientNetwork(server.host, server.port, truststorePath, truststorePassword)) {
+            System.exit(-1);
+        }
         client.run(userId, password);
     }
 
