@@ -28,7 +28,7 @@ O objetivo desta fase é focar funcionalidades e persistência.
 ### Sintaxe esperada
 
 - Servidor: `SpertaServer [port] <password-cifra> <keystore> <password-keystore>`
-- Cliente: `SpertaClient <serverAddress> <truststore> <password-truststore> <user-id> <password>`
+- Cliente: `SpertaClient <serverAddress> <truststore> <password-truststore> <keystore> <password-keystore> <user-id> <password>`
 
 `serverAddress` aceita formato `<ip-ou-hostname>[:porto]`.
 Se o porto não for indicado, cliente e servidor usam por omissão `22345`.
@@ -89,7 +89,7 @@ make serverJAR
 Executar cliente pelo JAR (substituir pelos teus valores):
 
 ```bash
-java -jar dist/SpertaClient.jar localhost:22345 clienttruststore.jks truststorepass Nexus ehBueFixe
+java -jar dist/SpertaClient.jar localhost:22345 clienttruststore.jks truststorepass clientkeystore.jks clientkeypass Nexus ehBueFixe
 ```
 
 ### Compilação manual (alternativa)
@@ -107,7 +107,7 @@ java -cp bin main.server.SpertaServer 22345 cipherpass serverkeystore.jks keysto
 Cliente:
 
 ```bash
-java -cp bin main.client.SpertaClient localhost:22345 clienttruststore.jks truststorepass Nexus ehBueFixe
+java -cp bin main.client.SpertaClient localhost:22345 clienttruststore.jks truststorepass clientkeystore.jks clientkeypass Nexus ehBueFixe
 ```
 
 ## Fluxo de autenticação e atestação

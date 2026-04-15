@@ -1,9 +1,9 @@
-SE## 1. Communication & Infrastructure (TLS)
+## 1. Communication & Infrastructure (TLS)
 * [x] **Switch to TLS/SSL Sockets:** Replace all clear-text TCP connections with secure TLS sockets.
 * [x] **Implement Unilateral Authentication:** Ensure the client verifies the server’s identity using the server's certificate.
 * [ ] **Manage Key Material:**
     * [x] Create a **Keystore** for the server (containing its private key and self-signed certificate).
-    * [ ] Create a **Keystore** for each user.
+    * [x] Create a **Keystore** for each user.
     * [x] Create a **Truststore** for the client to store the server's certificate and other users' certificates.
     * [x] Use **RSA 2048-bit** for all public-private key pairs.
 
@@ -59,12 +59,14 @@ SE## 1. Communication & Infrastructure (TLS)
 ## Notes
 * TLS client/server wiring is now in place in code.
 * The client verifies the server certificate through the configured truststore and hostname verification.
+* The client startup flow now matches the PDF syntax and loads a user keystore at startup.
 * Local test materials created in the project root:
   * `serverkeystore.jks`
   * `server-cert.pem`
   * `clienttruststore.jks`
+  * `clientkeystore.jks`
 * Still missing for full project completion:
-  * per-user keystores/certificates
+  * per-user certificate upload/distribution logic
   * encrypted server persistence with PBE
   * SHA-256 integrity checks
   * nonce-based remote attestation

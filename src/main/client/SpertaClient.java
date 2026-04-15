@@ -7,10 +7,13 @@
 
 package main.client;
 
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.security.KeyStore;
 import java.util.Scanner;
 
 public class SpertaClient {
@@ -25,6 +28,7 @@ public class SpertaClient {
             " - EXIT ou QUIT # Terminar a ligacao ao servidor e fechar o cliente",
             " - LS ou LS <hm> # Listar casas com acesso, ou listar dispositivos e temporizadores de uma casa <hm>");
     private static ClientNetwork network;
+    private static KeyStore userKeyStore;
 
 
     public static class ServerAddress {
@@ -73,23 +77,45 @@ public class SpertaClient {
     }
 
 
+    private static KeyStore loadUserKeyStore(String keystorePath, String keystorePassword) {
+        Path path = Paths.get(keystorePath);
+        if (!Files.isRegularFile(path) || !Files.isReadable(path)) {
+            System.err.println("Keystore do utilizador não encontrado ou sem permissões de leitura: " + path.toAbsolutePath());
+            System.exit(-1);
+        }
+
+        try (FileInputStream fis = new FileInputStream(path.toFile())) {
+            KeyStore keyStore = KeyStore.getInstance(KeyStore.getDefaultType());
+            keyStore.load(fis, keystorePassword.toCharArray());
+            return keyStore;
+        } catch (Exception e) {
+            System.err.println("Não foi possível carregar a keystore do utilizador: " + e.getMessage());
+            System.exit(-1);
+            return null;
+        }
+    }
+
+
     public static void main(String[] args) {
-        if (args.length != 5){
-            System.err.println("Uso: SpertaClient <serverAddress> <truststore> <password-truststore> <user-id> <password>");
+        if (args.length != 7){
+            System.err.println("Uso: SpertaClient <serverAddress> <truststore> <password-truststore> <keystore> <password-keystore> <user-id> <password>");
             System.exit(-1);
         }
         
         ServerAddress server = validateServerAddress(args[0]);
         String truststorePath = args[1];
         String truststorePassword = args[2];
-        String userId = args[3];
-        String password = args[4];
+        String keystorePath = args[3];
+        String keystorePassword = args[4];
+        String userId = args[5];
+        String password = args[6];
         
-        if (truststorePath.isEmpty() || truststorePassword.isEmpty() || userId.isEmpty() || password.isEmpty()) {
-            System.err.println("Truststore, password-truststore, user-id e password não podem estar vazios.");
+        if (truststorePath.isEmpty() || truststorePassword.isEmpty() || keystorePath.isEmpty() || keystorePassword.isEmpty() || userId.isEmpty() || password.isEmpty()) {
+            System.err.println("Truststore, password-truststore, keystore, password-keystore, user-id e password não podem estar vazios.");
             System.exit(-1);
         }
 
+        userKeyStore = loadUserKeyStore(keystorePath, keystorePassword);
         SpertaClient client = new SpertaClient();
         network = new ClientNetwork();
         if (!network.initClientNetwork(server.host, server.port, truststorePath, truststorePassword)) {
