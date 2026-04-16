@@ -1,73 +1,62 @@
+To ensure you hit every requirement for the final submission on **April 24th**, here is the consolidated and complete **Phase 2 TO-DO list**.
+
+---
+
 ## 1. Communication & Infrastructure (TLS)
-* [x] **Switch to TLS/SSL Sockets:** Replace all clear-text TCP connections with secure TLS sockets.
-* [x] **Implement Unilateral Authentication:** Ensure the client verifies the server’s identity using the server's certificate.
-* [ ] **Manage Key Material:**
-    * [x] Create a **Keystore** for the server (containing its private key and self-signed certificate).
-    * [x] Create a **Keystore** for each user.
-    * [x] Create a **Truststore** for the client to store the server's certificate and other users' certificates.
+* [x] **Switch to TLS/SSL Sockets:** Replace standard TCP with secure TLS/SSL connections to guarantee confidentiality and integrity.
+* [x] **Unilateral Authentication:** Ensure the client verifies the server’s identity using the server's certificate.
+* [x] **Key Material Generation:**
     * [x] Use **RSA 2048-bit** for all public-private key pairs.
+    * [x] Create a **Keystore** for the server (private key + certificate).
+    * [x] Create a **Keystore** for each user (private key + certificate).
+    * [x] Create a **Truststore** for the client to hold the server's self-signed certificate and other users' certificates.
 
 ---
 
 ## 2. Server-Side Data Protection
-* [ ] **Implement File Encryption (PBE):**
-    * [ ] Use **AES 128-bit** with Password-Based Encryption (PBE) to encrypt server files (houses, remote attestation data).
-    * [ ] Implement the salt management logic to ensure the encryption key remains consistent across reboots.
-* [ ] **Integrity Checks:**
-    * [ ] Calculate **SHA256** hashes for every server file and save them as `<file>.hash`.
-    * [ ] Verify integrity upon server startup and during execution; terminate with `NOK-INTEGRITY` if it fails.
+* [ ] **Password-Based Encryption (PBE):**
+    * [ ] Use **AES 128-bit** to cifrar server files (houses, user lists, and attestation data).
+    * [ ] Implement salt management so the same encryption key is generated from the password across server restart.
+* [ ] **Integrity Verification:**
+    * [ ] Generate a **SHA256** hash for every file and store it in a corresponding `.hash` file.
+    * [ ] Verify integrity **after** decryption.
+    * [ ] **Crucial:** If verification fails at any point, print `NOK-INTEGRITY` and terminate immediately.
 * [ ] **Secure Password Storage:**
-    * [ ] Update the user file to store: `<user-id>:<hash(password || salt)>:<salt>`.
-    * [ ] Use **SHA256** for the hashing.
+    * [ ] Transition from clear-text to storing `<user-id>:<hash(password || salt)>:<salt>` using **SHA256**.
+    * [ ] Recalculate and compare hashes for authentication.
 
 ---
 
-## 3. Remote Attestation
-* [ ] **Upgrade Attestation Mechanism:** Move from file-size validation to a hash-based challenge-response.
-* [ ] **Implement Anti-Replay Logic:**
-    * [ ] **Server:** Generate and send an 8-byte random **nonce** (long) to the client.
-    * [ ] **Client:** Concatenate the nonce with the `SpertaClient.jar` file, calculate the **SHA256** hash, and send it back.
-    * [ ] **Server:** Compare the received hash against a local reference calculation.
-    * [ ] Handle `OK-ATTEST` and `NOK-ATTEST` responses.
+## 3. Remote Attestation (Anti-Replay)
+* [x] **Challenge-Response Logic:**
+    * [x] **Server:** Generate and send a random **8-byte nonce** (long) upon connection.
+    * [x] **Client:** Concatenate nonce with `SpertaClient.jar`, compute **SHA256**, and return the result.
+    * [x] **Server:** Compare against a local calculation using its reference copy of the JAR.
+* [x] **Response Handling:** Implement `OK-ATTEST` (proceed to login) and `NOK-ATTEST` (terminate connection).
 
 ---
 
 ## 4. End-to-End (E2E) Confidentiality
+* [ ] **Certificate Distribution Repository:**
+    * [ ] **First Login:** Server must request, receive, and store the user’s `.cert` file.
+    * [ ] **Subsequent Logins:** Server distributes certificates as needed for E2E sharing.
 * [ ] **Section Key Management:**
-    * [ ] **Owner:** Generate a symmetric **AES 128-bit** "Section Key" whenever a new house is created.
-    * [ ] **Owner:** Encrypt the Section Key with the owner's public key and store it on the server.
+    * [ ] **CREATE:** Owner generates an **AES 128-bit** "Section Key" for each section.
+    * [ ] **Key Storage:** Encrypt Section Keys with the Owner's public key and store them as `key.<hm>.<s>.<owner>` on the server.
 * [ ] **Secure Sharing (ADD Command):**
-    * [ ] Modify the `ADD` command so the Owner retrieves the Section Key, re-encrypts it with the new user's public key, and sends it back to the server.
-* [ ] **Certificate Distribution:**
-    * [ ] Enable `SpertaServer` to act as a public key certificate repository.
-    * [ ] Implement logic for the client to upload its certificate during the first authentication.
+    * [ ] Owner must fetch the key, re-encrypt it with the **new user's public key**, and upload the result.
 * [ ] **Encrypted Commands (EC, RT, RH):**
-    * [ ] **EC:** Ensure the client fetches/decodes the Section Key and encrypts the device state (`<int>`) before sending it to the server.
-    * [ ] **RT/RH:** Ensure the server sends the encrypted data along with the relevant Section Key (encrypted for the requester) so the client can decrypt locally.
+    * [ ] **EC:** Client fetches the Section Key, decrypts it, and encrypts the device state value `<int>` before sending it to the server.
+    * [ ] **RT/RH:** Server checks permissions and sends encrypted data alongside the Section Key (encrypted for the requester).
 
 ---
 
-## 5. Final Delivery Requirements
-* [x] **Update CLI Arguments:** Adjust the startup commands for `SpertaServer` and `SpertaClient` to include the new keystore/truststore paths and passwords.
-* [ ] **Prepare Submission Package:**
-    * [ ] ZIP file named `SegC-grupoXX-proj1-fase2.zip`.
-    * [ ] Include: Source code, Keystores, Truststores, Certificates, JAR files, and a `readme.txt`.
-* [ ] **Individual Tasks:** Complete the Moodle self-assessment form by April 25th.
-
----
-
-## Notes
-* TLS client/server wiring is now in place in code.
-* The client verifies the server certificate through the configured truststore and hostname verification.
-* The client startup flow now matches the PDF syntax and loads a user keystore at startup.
-* Local test materials created in the project root:
-  * `serverkeystore.jks`
-  * `server-cert.pem`
-  * `clienttruststore.jks`
-  * `clientkeystore.jks`
-* Still missing for full project completion:
-  * per-user certificate upload/distribution logic
-  * encrypted server persistence with PBE
-  * SHA-256 integrity checks
-  * nonce-based remote attestation
-  * end-to-end encryption for section/device data
+## 5. Final Delivery Prep
+* [ ] **Updated CLI Syntax:**
+    * [ ] **Server:** `SpertaServer <port> <password-cifra> <keystore> <password-keystore>`.
+    * [ ] **Client:** `SpertaClient <serverAddress> <truststore> <pass-trust> <keystore> <pass-key> <user-id> <pass>`.
+* [ ] **ZIP Package Creation:**
+    * [ ] Name: `SegC-grupoXX-proj1-fase2.zip`.
+    * [ ] Include all source code, keystores, truststores, certificates, and JAR files.
+    * [ ] Write a `readme.txt` with compilation, execution instructions, and limitations.
+* [ ] **Self-Assessment:** Complete the Moodle contribution form by April 25th.

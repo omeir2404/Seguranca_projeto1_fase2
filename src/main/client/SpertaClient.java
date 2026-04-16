@@ -9,10 +9,11 @@ package main.client;
 
 import java.io.FileInputStream;
 import java.io.IOException;
-import java.io.InputStream;
+import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.security.MessageDigest;
 import java.security.KeyStore;
 import java.util.Scanner;
 
@@ -216,23 +217,60 @@ public class SpertaClient {
         }
     }
 
-    private boolean attestation() throws IOException{
-        long size;
-        try (InputStream is = SpertaClient.class.getResourceAsStream("SpertaClient.class")) {
-            if (is == null) throw new IOException("Não foi possível carregar o recurso SpertaClient.class para atestação.");
-            size = is.readAllBytes().length;
-        }
-        String attestMsg = "ATTEST SpertaClient:" + size;
-        network.send(attestMsg);
+    private Path resolveClientJarPath() throws IOException {
+        try {
+            Path clientArtifact = Paths.get(
+                    SpertaClient.class.getProtectionDomain().getCodeSource().getLocation().toURI())
+                    .toAbsolutePath()
+                    .normalize();
 
-        String response = (String) network.receive();
-        if ("ATTEST OK".equals(response)) {
-            System.out.println("ATTESTATION OK");
-            return true;
-        } else {
+            if (Files.isRegularFile(clientArtifact)) {
+                return clientArtifact;
+            }
+
+            Path projectRoot = Paths.get(System.getProperty("user.dir")).toAbsolutePath().normalize();
+            Path fallbackJar = projectRoot.resolve("dist").resolve("SpertaClient.jar").toAbsolutePath().normalize();
+            if (Files.isRegularFile(fallbackJar)) {
+                return fallbackJar;
+            }
+
+            throw new IOException("A atestação remota requer um ficheiro SpertaClient.jar disponível em execução ou em dist/.");
+        } catch (Exception e) {
+            throw new IOException("Não foi possível localizar o ficheiro SpertaClient.jar em execução.", e);
+        }
+    }
+
+    private byte[] calculateAttestationHash(long nonce, Path clientJarPath) throws IOException {
+        try {
+            byte[] jarBytes = Files.readAllBytes(clientJarPath);
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            digest.update(ByteBuffer.allocate(Long.BYTES).putLong(nonce).array());
+            digest.update(jarBytes);
+            return digest.digest();
+        } catch (Exception e) {
+            throw new IOException("Não foi possível calcular a prova de atestação do cliente.", e);
+        }
+    }
+
+    private boolean attestation() throws IOException{
+        Object nonceObj = network.receive();
+        if (!(nonceObj instanceof Long nonce)) {
             System.out.println("ATTESTATION FAILED");
             return false;
         }
+
+        Path clientJarPath = resolveClientJarPath();
+        byte[] attestationHash = calculateAttestationHash(nonce, clientJarPath);
+        network.send(attestationHash);
+
+        String response = (String) network.receive();
+        if ("OK-ATTEST".equals(response)) {
+            System.out.println("ATTESTATION OK");
+            return true;
+        }
+
+        System.out.println("ATTESTATION FAILED");
+        return false;
     }
 
     public void run(String userId, String password) {

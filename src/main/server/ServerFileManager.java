@@ -60,6 +60,7 @@ public class ServerFileManager {
     private static final String SECTION_COUNTERS_FILENAME = "section_counters.txt";
     private static final String LAST_COMMANDS_FILENAME = "last_commands.txt";
     private static final String ATTESTATION_FILENAME = "attestation.txt";
+    private static final String DEFAULT_REFERENCE_CLIENT_JAR = "dist/SpertaClient.jar";
 
     private Path projectRoot;
     private String usersFile;
@@ -467,6 +468,19 @@ public class ServerFileManager {
             System.err.println("Erro ao ler " + attestationFile + ": " + e.getMessage());
         }
         return expectedAttestation;
+    }
+
+    public Path getReferenceClientJarPath() {
+        String configuredPath = getAttestationData();
+        if (configuredPath == null || configuredPath.isBlank()) {
+            configuredPath = DEFAULT_REFERENCE_CLIENT_JAR;
+        }
+
+        Path candidate = Paths.get(configuredPath);
+        if (!candidate.isAbsolute()) {
+            candidate = projectRoot.resolve(candidate);
+        }
+        return candidate.toAbsolutePath().normalize();
     }
 
     /**

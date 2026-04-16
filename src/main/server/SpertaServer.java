@@ -10,8 +10,11 @@ package main.server;
 import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.SecureRandom;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -38,6 +41,7 @@ public class SpertaServer extends Thread {
 	private static String cipherPassword;
 	private static String keystorePath;
 	private static String keystorePass;
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
     // ============ INITIALIZATION METHODS ============
 
@@ -187,23 +191,39 @@ public class SpertaServer extends Thread {
 			return correct;
 		}
 
+		private byte[] calculateAttestationHash(long nonce, Path referenceJarPath) throws IOException {
+			try {
+				byte[] jarBytes = Files.readAllBytes(referenceJarPath);
+				MessageDigest digest = MessageDigest.getInstance("SHA-256");
+				digest.update(ByteBuffer.allocate(Long.BYTES).putLong(nonce).array());
+				digest.update(jarBytes);
+				return digest.digest();
+			} catch (Exception e) {
+				throw new IOException("Não foi possível calcular a hash de atestação do cliente.", e);
+			}
+		}
+
 		private boolean attestClient() throws IOException {
-			String attestationMessage = (String) network.receive();
-			String expectedAttestation = fileManager.getAttestationData();
-
-			boolean valid = false;
-			if (expectedAttestation != null && attestationMessage != null && attestationMessage.startsWith("ATTEST ")) {
-				String received = attestationMessage.substring("ATTEST ".length()).trim();
-				valid = expectedAttestation.equals(received);
+			Path referenceJarPath = fileManager.getReferenceClientJarPath();
+			if (!Files.isRegularFile(referenceJarPath) || !Files.isReadable(referenceJarPath)) {
+				System.err.println("Ficheiro de referência para atestação não encontrado: " + referenceJarPath);
+				network.send("NOK-ATTEST");
+				return false;
 			}
 
-			if (valid) {
-				network.send("ATTEST OK");
-				return true;
+			long nonce = SECURE_RANDOM.nextLong();
+			network.send(Long.valueOf(nonce));
+
+			Object receivedProof = network.receive();
+			if (!(receivedProof instanceof byte[] receivedHash)) {
+				network.send("NOK-ATTEST");
+				return false;
 			}
 
-			network.send("ATTEST FAILED");
-			return false;
+			byte[] expectedHash = calculateAttestationHash(nonce, referenceJarPath);
+			boolean valid = MessageDigest.isEqual(expectedHash, receivedHash);
+			network.send(valid ? "OK-ATTEST" : "NOK-ATTEST");
+			return valid;
 		}
 
 		// ============ COMMAND EXECUTION METHODS ============

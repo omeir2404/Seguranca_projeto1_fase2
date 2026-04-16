@@ -35,13 +35,13 @@ compile:
 	@mkdir -p $(BIN_DIR)/main/server $(BIN_DIR)/main/client
 	@$(JAVAC) -d $(BIN_DIR) $(SRC_DIR)/main/server/*.java $(SRC_DIR)/main/client/*.java
 	@mkdir -p server_data/auth
-	@printf 'SpertaClient:%s\n' "$$(stat -c%s bin/main/client/SpertaClient.class)" > server_data/auth/attestation.txt
+	@printf 'dist/SpertaClient.jar\n' > server_data/auth/attestation.txt
 
 
 compile_client:
 	@$(JAVAC) -d $(BIN_DIR)  $(SRC_DIR)/main/client/*.java
 	@mkdir -p server_data/auth
-	@printf 'SpertaClient:%s\n' "$$(stat -c%s bin/main/client/SpertaClient.class)" > server_data/auth/attestation.txt
+	@printf 'dist/SpertaClient.jar\n' > server_data/auth/attestation.txt
 
 
 compile_server:
@@ -58,20 +58,20 @@ certs:
 server: compile
 	$(JAVA) -cp $(BIN_DIR) $(SERVER_CLASS) $(SERVER_ARGS)
 
-client: compile
-	@$(JAVA) -cp $(BIN_DIR) $(CLIENT_CLASS) $(CLIENT_ARGS)
+client: createClientJar
+	@$(JAVA) -jar $(DIST_DIR)/SpertaClient.jar $(CLIENT_ARGS)
 
-client2: compile
-	@$(JAVA) -cp $(BIN_DIR) $(CLIENT_CLASS) $(CLIENT_ARGS2)
+client2: createClientJar
+	@$(JAVA) -jar $(DIST_DIR)/SpertaClient.jar $(CLIENT_ARGS2)
 
-wrongclient: compile
-	@$(JAVA) -cp $(BIN_DIR) $(CLIENT_CLASS) $(CLIENT_WRONG_ARGS)
+wrongclient: createClientJar
+	@$(JAVA) -jar $(DIST_DIR)/SpertaClient.jar $(CLIENT_WRONG_ARGS)
 
 server_no_port: compile
 	$(JAVA) -cp $(BIN_DIR) $(SERVER_CLASS) 
 
-client_no_port: compile
-	@$(JAVA) -cp $(BIN_DIR) $(CLIENT_CLASS) $(CLIENT_ARGS_NO_PORT)
+client_no_port: createClientJar
+	@$(JAVA) -jar $(DIST_DIR)/SpertaClient.jar $(CLIENT_ARGS_NO_PORT)
 
 
 re: clean compile

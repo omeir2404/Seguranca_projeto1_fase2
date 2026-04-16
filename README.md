@@ -43,6 +43,8 @@ make server
 make client
 ```
 
+Para a atestação remota passar, o cliente deve ter acesso a `dist/SpertaClient.jar`. Os alvos `make client`, `make client2`, `make wrongclient` e `make client_no_port` já geram e executam esse JAR automaticamente.
+
 Também existem alvos auxiliares:
 
 - `make client2`
@@ -112,10 +114,10 @@ java -cp bin main.client.SpertaClient localhost:22345 clienttruststore.jks trust
 
 ## Fluxo de autenticação e atestação
 
-1. O cliente envia atestação: `ATTEST SpertaClient:<tamanho-do-class>`.
-2. O servidor compara com `server_data/auth/attestation.txt`.
-3. Se falhar: cliente imprime `ATTESTATION FAILED` e termina.
-4. Se passar: cliente imprime `ATTESTATION OK`.
+1. O servidor envia um nonce aleatório de 8 bytes ao cliente.
+2. O cliente localiza o `SpertaClient.jar` em execução, calcula `SHA-256(nonce || jar)` e devolve o digest.
+3. O servidor calcula localmente o mesmo digest sobre a sua cópia de referência do cliente, cujo caminho está em `server_data/auth/attestation.txt`.
+4. Se coincidir, o servidor responde `OK-ATTEST`; se não coincidir, responde `NOK-ATTEST` e a ligação termina.
 5. Depois acontece autenticacao por `user-id` e `password`:
    - novo utilizador: `OK-NEW-USER` (registado no servidor);
    - utilizador existente com password correta: `OK-USER`;
@@ -241,6 +243,7 @@ client_data/
 ### Formatos relevantes
 
 - `users.txt`: `user:password`
+- `attestation.txt`: caminho para a cópia de referência do `SpertaClient.jar` usada na atestação
 - `homes_registry.txt`: `House:Owner`
 - `permissions.txt`: `House:User:Section`
 - `section_counters.txt`: `House:Section=NextCounter,...`
