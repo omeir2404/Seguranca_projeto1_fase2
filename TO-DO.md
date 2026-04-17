@@ -14,13 +14,13 @@ To ensure you hit every requirement for the final submission on **April 24th**, 
 ---
 
 ## 2. Server-Side Data Protection
-* [ ] **Password-Based Encryption (PBE):**
-    * [ ] Use **AES 128-bit** to cifrar server files (houses, user lists, and attestation data).
-    * [ ] Implement salt management so the same encryption key is generated from the password across server restart.
-* [ ] **Integrity Verification:**
-    * [ ] Generate a **SHA256** hash for every file and store it in a corresponding `.hash` file.
-    * [ ] Verify integrity **after** decryption.
-    * [ ] **Crucial:** If verification fails at any point, print `NOK-INTEGRITY` and terminate immediately.
+* [x] **Password-Based Encryption (PBE):**
+    * [x] Use **AES 128-bit** to cifrar server files (houses, user lists, and attestation data).
+    * [x] Implement salt management so the same encryption key is generated from the password across server restart.
+* [x] **Integrity Verification:**
+    * [x] Generate a **SHA256** hash for every file and store it in a corresponding `.hash` file.
+    * [x] Verify integrity **after** decryption.
+    * [x] **Crucial:** If verification fails at any point, print `NOK-INTEGRITY` and terminate immediately.
 * [ ] **Secure Password Storage:**
     * [ ] Transition from clear-text to storing `<user-id>:<hash(password || salt)>:<salt>` using **SHA256**.
     * [ ] Recalculate and compare hashes for authentication.

@@ -34,8 +34,9 @@ public class ServerCommandHandler {
     private static final Set<String> ALLOWED_SECTIONS = Set.of("M", "G", "L", "P", "B", "E");
     private ServerNetwork serverNetwork;
 
-    public ServerCommandHandler(Map<String, String> users, Map<String, String> houses, Map<String, Map<String, String>> permissions, Map<String, Map<String, Integer>> deviceState, ServerNetwork serverNetwork) {
-        Path current = Paths.get(System.getProperty("user.dir")).toAbsolutePath().normalize();
+    private ServerFileManager fileManager;
+
+    public ServerCommandHandler(Map<String, String> users, Map<String, String> houses, Map<String, Map<String, String>> permissions, Map<String, Map<String, Integer>> deviceState, ServerNetwork serverNetwork, ServerFileManager fileManager) {        Path current = Paths.get(System.getProperty("user.dir")).toAbsolutePath().normalize();
 		Path projectRoot = current;
         this.users = users;
         this.houses = houses;
@@ -51,6 +52,30 @@ public class ServerCommandHandler {
         HOUSE_AUDIT_LOG = serverDataRoot.resolve("metadata").resolve("houses.log").toString();
         LOG_DIR = serverDataRoot.resolve("homes").toString();
         this.serverNetwork = serverNetwork;
+
+        this.fileManager = fileManager;
+    }
+
+    private List<String> readLines(String filePath) {
+        try {
+            ensureParentDir(filePath);
+            String content = fileManager.readProtectedFile(Paths.get(filePath).toAbsolutePath().normalize());
+            if (content.isEmpty()) return new ArrayList<>();
+            return new ArrayList<>(Arrays.asList(content.split("\\r?\\n")));
+        } catch (Exception e) {
+            System.err.println("Erro ao ler ficheiro encriptado: " + e.getMessage());
+            return new ArrayList<>();
+        }
+    }
+
+    private void writeLines(String filePath, List<String> lines) {
+        try {
+            ensureParentDir(filePath);
+            String content = String.join(System.lineSeparator(), lines);
+            fileManager.writeProtectedFile(Paths.get(filePath).toAbsolutePath().normalize(), content);
+        } catch (Exception e) {
+            System.err.println("Erro ao escrever ficheiro encriptado: " + e.getMessage());
+        }
     }
 
     private Path getDeviceLogPath(String house, String device) {
@@ -69,7 +94,7 @@ public class ServerCommandHandler {
             ensureFileHeader(DEVICE_SECTIONS_FILE, "House:Device:Section");
             Path mappingPath = Paths.get(DEVICE_SECTIONS_FILE).toAbsolutePath().normalize();
             List<String> lines = Files.exists(mappingPath)
-                    ? Files.readAllLines(mappingPath, StandardCharsets.UTF_8)
+                    ? readLines(DEVICE_SECTIONS_FILE)
                     : new ArrayList<>();
 
             if (lines.isEmpty()) {
@@ -93,8 +118,7 @@ public class ServerCommandHandler {
                 lines.add(replacement);
             }
 
-            Files.write(mappingPath, lines, StandardCharsets.UTF_8,
-                    StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+            writeLines(DEVICE_SECTIONS_FILE, lines);
         } catch (IOException e) {
             System.err.println("Erro ao persistir secao do dispositivo: " + e.getMessage());
         }
@@ -107,7 +131,7 @@ public class ServerCommandHandler {
                 return null;
             }
 
-            List<String> lines = Files.readAllLines(mappingPath, StandardCharsets.UTF_8);
+            List<String> lines = readLines(DEVICE_SECTIONS_FILE);
             String key = house + ":" + device + ":";
 
             for (int i = 1; i < lines.size(); i++) {
@@ -123,7 +147,7 @@ public class ServerCommandHandler {
                     }
                 }
             }
-        } catch (IOException e) {
+        } catch (Exception e) {
             System.err.println("Erro ao ler secao do dispositivo: " + e.getMessage());
         }
         return null;
@@ -133,9 +157,7 @@ public class ServerCommandHandler {
         try {
             ensureFileHeader(LAST_COMMANDS_FILE, "Home:Device:Value");
             Path statePath = Paths.get(LAST_COMMANDS_FILE).toAbsolutePath().normalize();
-            List<String> lines = Files.exists(statePath)
-                    ? Files.readAllLines(statePath, StandardCharsets.UTF_8)
-                    : new ArrayList<>();
+            List<String> lines = readLines(LAST_COMMANDS_FILE);
 
             if (lines.isEmpty()) {
                 lines.add("Home:Device:Value");
@@ -158,8 +180,7 @@ public class ServerCommandHandler {
                 lines.add(replacement);
             }
 
-            Files.write(statePath, lines, StandardCharsets.UTF_8,
-                    StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+            writeLines(LAST_COMMANDS_FILE, lines);
         } catch (IOException e) {
             System.err.println("Erro ao persistir último estado do dispositivo: " + e.getMessage());
         }
@@ -186,74 +207,30 @@ public class ServerCommandHandler {
             Files.createDirectories(parent);
         }
     }
-
     private void ensureFileHeader(String filePath, String header) throws IOException {
-        ensureParentDir(filePath);
-        Path path = Paths.get(filePath).toAbsolutePath().normalize();
-        if (!Files.exists(path) || Files.size(path) == 0L) {
-            Files.writeString(path, header + System.lineSeparator(), StandardCharsets.UTF_8,
-                StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+        List<String> lines = readLines(filePath);
+        if (lines.isEmpty() || lines.get(0).trim().isEmpty()) {
+            lines.clear();
+            lines.add(header);
+            writeLines(filePath, lines);
         }
     }
 
     private void ensureLogHeaderAtTop(Path logPath, String header) throws IOException {
-        ensureParentDir(logPath.toString());
-        if (!Files.exists(logPath)) {
-            Files.writeString(
-                    logPath,
-                    header + System.lineSeparator(),
-                    StandardCharsets.UTF_8,
-                    StandardOpenOption.CREATE,
-                    StandardOpenOption.TRUNCATE_EXISTING
-            );
-            return;
-        }
-
-        String content = Files.readString(logPath, StandardCharsets.UTF_8);
-        if (content.isEmpty()) {
-            Files.writeString(
-                    logPath,
-                    header + System.lineSeparator(),
-                    StandardCharsets.UTF_8,
-                    StandardOpenOption.TRUNCATE_EXISTING,
-                    StandardOpenOption.WRITE
-            );
-            return;
-        }
-
-        String[] lines = content.split("\\R", 2);
-        String firstLine;
-        if (lines.length > 0) {
-            firstLine = lines[0].trim();
-        } else {
-            firstLine = "";
-        }
-        if (!header.equalsIgnoreCase(firstLine)) {
-            Files.writeString(
-                    logPath,
-                    header + System.lineSeparator() + content,
-                    StandardCharsets.UTF_8,
-                    StandardOpenOption.TRUNCATE_EXISTING,
-                    StandardOpenOption.WRITE
-            );
+        List<String> lines = readLines(logPath.toString());
+        if (lines.isEmpty()) {
+            lines.add(header);
+            writeLines(logPath.toString(), lines);
+        } else if (!header.equalsIgnoreCase(lines.get(0).trim())) {
+            lines.add(0, header);
+            writeLines(logPath.toString(), lines);
         }
     }
 
     private void appendLine(String filePath, String line) throws IOException {
-        ensureParentDir(filePath);
-        Path path = Paths.get(filePath).toAbsolutePath().normalize();
-        if (!Files.exists(path)) {
-            Files.createFile(path);
-        }
-
-        boolean empty = Files.size(path) == 0L;
-        String payload;
-        if (empty) {
-            payload = line;
-        } else {
-            payload = System.lineSeparator() + line;
-        }
-        Files.writeString(path, payload, StandardCharsets.UTF_8, StandardOpenOption.APPEND);
+        List<String> lines = readLines(filePath);
+        lines.add(line);
+        writeLines(filePath, lines);
     }
 
     private synchronized boolean persistPermissionsSnapshot() {
@@ -290,17 +267,10 @@ public class ServerCommandHandler {
                 }
             }
 
-            Files.writeString(
-                    temp,
-                    content.toString(),
-                    StandardCharsets.UTF_8,
-                    StandardOpenOption.CREATE,
-                    StandardOpenOption.TRUNCATE_EXISTING,
-                    StandardOpenOption.WRITE
-            );
-            Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            ensureParentDir(PERMISSIONS_FILE);
+            fileManager.writeProtectedFile(Paths.get(PERMISSIONS_FILE).toAbsolutePath().normalize(), content.toString());
             return true;
-        } catch (IOException e) {
+        } catch (Exception e) {
             System.err.println("Erro ao persistir permissões: " + e.getMessage());
             return false;
         }
@@ -362,8 +332,7 @@ public class ServerCommandHandler {
         try {
             ensureFileHeader(COUNTERS_FILE, "House:Section=NextCounter");
             Path countersPath = Paths.get(COUNTERS_FILE).toAbsolutePath().normalize();
-            List<String> lines = Files.readAllLines(countersPath, StandardCharsets.UTF_8);
-
+            List<String> lines = readLines(COUNTERS_FILE);
             if (lines.isEmpty()) {
                 lines.add("House:Section=NextCounter");
             }
@@ -398,10 +367,9 @@ public class ServerCommandHandler {
                 lines.add(updatedLine);
             }
 
-            Files.write(countersPath, lines, StandardCharsets.UTF_8,
-                    StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+            writeLines(COUNTERS_FILE, lines);
             return deviceName;
-        } catch (IOException e) {
+        } catch (Exception e) {
             System.err.println("Erro ao atualizar section counters: " + e.getMessage());
             return null;
         }
@@ -795,23 +763,36 @@ public class ServerCommandHandler {
     }
 
  
-    public void RH_sendFile(String house, String device) {
+public void RH_sendFile(String house, String device) {
         if (device != null) {
             device = device.toUpperCase();
         }
 
         serverNetwork.send("OK");
-
-        File logFile = getDeviceLogPath(house, device).toFile();
-        if (logFile.exists()) { 
-            serverNetwork.sendFile(logFile.toPath());
+        Path logPath = getDeviceLogPath(house, device);
+        File logFile = logPath.toFile();
+        
+        if (logFile.exists()) {
+            try {
+                // Read and decrypt the file
+                String decryptedContent = fileManager.readProtectedFile(logPath);
+                byte[] bytes = decryptedContent.getBytes(StandardCharsets.UTF_8);
+                
+                // Wrap in streams so ServerNetwork.sendFile(SequenceInputStream) accepts it
+                InputStream is = new ByteArrayInputStream(bytes);
+                SequenceInputStream sis = new SequenceInputStream(Collections.enumeration(Arrays.asList(is)));
+                
+                serverNetwork.sendFile(sis, bytes.length);
+            } catch (Exception e) {
+                System.err.println("Erro a desencriptar log para envio: " + e.getMessage());
+            }
         } else {
             System.out.println("Nenhum log encontrado para o dispositivo: " + device + " na casa: " + house);
         }
     }
 
 
-//////////////////////////FUNÇÕES AUXILIARES/////////////////////////////////////////
+// ################FUNÇÕES AUXILIARES################
 
     private boolean checkPermissions(String house, String user, String section) {
         if (!houses.containsKey(house)) {

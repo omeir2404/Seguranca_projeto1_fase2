@@ -69,6 +69,7 @@ public class SpertaServer extends Thread {
     }
 
     public static void initialize_server_vars() {
+		fileManager.initCrypto(cipherPassword);
         users = fileManager.loadUsers();
         houses = fileManager.loadHouses();
         permissions = fileManager.loadPermissions();
@@ -90,10 +91,16 @@ public class SpertaServer extends Thread {
             port = validatePort(args[0]);
             firstCredentialArg = 1;
         }
+		cipherPassword = args[firstCredentialArg]; 
+		keystorePath = args[firstCredentialArg + 1];   
+		keystorePass = args[firstCredentialArg + 2];
 
         initializeFileManager();
 		verifyPersistenceStructure();
         initialize_server_vars();
+
+        int generatedHashes = fileManager.generateHashesForServerData();
+        System.out.println("[startup][integrity] ficheiros hash gerados/atualizados=" + generatedHashes);
 
 		cipherPassword = args[firstCredentialArg]; // Used for PBE AES-128 file encryption [cite: 82]
 		keystorePath = args[firstCredentialArg + 1];   // Path to server's keystore [cite: 104]
@@ -160,11 +167,12 @@ public class SpertaServer extends Thread {
 		private ServerCommandHandler commandHandler;
 		private ServerNetwork network;
 		
-    	ClientHandler(Socket sock) {
+		ClientHandler(Socket sock) {
 			this.socket = sock;
 			try{
 				this.network = new ServerNetwork(sock);
-				this.commandHandler = new ServerCommandHandler(users, houses, permissions, deviceState, network);
+				// Pass fileManager as the last argument
+				this.commandHandler = new ServerCommandHandler(users, houses, permissions, deviceState, network, fileManager);
 				System.out.println("Thread do servidor criada para cliente.");
 			} catch (Exception e){
 				System.out.println("Erro ao criar thread do servidor");

@@ -8,13 +8,23 @@
 package main.server;
 
 import java.io.*;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.security.MessageDigest;
+import java.security.SecureRandom;
 import java.util.*;
+import javax.crypto.Cipher;
+import javax.crypto.SecretKey;
+import javax.crypto.SecretKeyFactory;
+import javax.crypto.spec.GCMParameterSpec;
+import javax.crypto.spec.PBEKeySpec;
+import javax.crypto.spec.SecretKeySpec;
 
 /**
  * Manages all file I/O operations for the Sperta Server.
@@ -44,6 +54,7 @@ public class ServerFileManager {
 
     private static final String DELIMITER = ":";
     private static final String CSV_EXTENSION = ".csv";
+    private static final String HASH_EXTENSION = ".hash";
     private static final String LOG_HEADER = "time; command";
     private static final String EC_COMMAND = "EC";
     private static final int MIN_DEVICE_VALUE = 0;
@@ -69,10 +80,178 @@ public class ServerFileManager {
     private String logsDir;
     private String attestationFile;
 
+    private SecretKey masterKey;
+    private static final byte[] MAGIC_HEADER = "SPRT".getBytes(StandardCharsets.UTF_8); // 4 bytes
+    private static final int GCM_TAG_LENGTH = 128;
+    private static final int GCM_IV_LENGTH = 12;
+
     public ServerFileManager() {
         initializeFilePaths();
         ensurePersistenceStructure();
     }
+
+
+    public void initCrypto(String password) {
+        try {
+            Path saltPath = projectRoot.resolve(SERVER_DATA_DIR).resolve(AUTH_DIR).resolve("pbe.salt");
+            byte[] salt;
+            
+            if (Files.exists(saltPath)) {
+                salt = Files.readAllBytes(saltPath);
+            } else {
+                salt = new byte[16];
+                new SecureRandom().nextBytes(salt);
+                Files.write(saltPath, salt);
+            }
+
+            SecretKeyFactory skf = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256");
+            PBEKeySpec spec = new PBEKeySpec(password.toCharArray(), salt, 150_000, 128);
+            byte[] keyBytes = skf.generateSecret(spec).getEncoded();
+            this.masterKey = new SecretKeySpec(keyBytes, "AES");
+            
+        } catch (Exception e) {
+            System.err.println("Erro ao inicializar o motor criptográfico: " + e.getMessage());
+            System.exit(-1);
+        }
+    }
+
+    public void writeProtectedFile(Path path, String content) throws Exception {
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        byte[] iv = new byte[GCM_IV_LENGTH];
+        new SecureRandom().nextBytes(iv);
+        
+        cipher.init(Cipher.ENCRYPT_MODE, masterKey, new GCMParameterSpec(GCM_TAG_LENGTH, iv));
+        byte[] ciphertext = cipher.doFinal(content.getBytes(StandardCharsets.UTF_8));
+        
+        try (DataOutputStream dos = new DataOutputStream(Files.newOutputStream(path))) {
+            dos.write(MAGIC_HEADER);
+            dos.writeByte(1); // Version
+            dos.writeByte(iv.length);
+            dos.write(iv);
+            dos.write(ciphertext);
+        }
+    }
+
+    public String readProtectedFile(Path path) throws Exception {
+        if (!Files.exists(path)) return "";
+        
+        byte[] fileData = Files.readAllBytes(path);
+        if (fileData.length < 4) return new String(fileData, StandardCharsets.UTF_8); // Empty or too small
+        
+        // Check if it has our encrypted magic header
+        if (fileData[0] == MAGIC_HEADER[0] && fileData[1] == MAGIC_HEADER[1] && 
+            fileData[2] == MAGIC_HEADER[2] && fileData[3] == MAGIC_HEADER[3]) {
+            
+            ByteBuffer buffer = ByteBuffer.wrap(fileData);
+            buffer.position(4); // Skip magic
+            buffer.get(); // Skip version
+            int ivLength = buffer.get();
+            byte[] iv = new byte[ivLength];
+            buffer.get(iv);
+            
+            byte[] ciphertext = new byte[buffer.remaining()];
+            buffer.get(ciphertext);
+            
+            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+            cipher.init(Cipher.DECRYPT_MODE, masterKey, new GCMParameterSpec(GCM_TAG_LENGTH, iv));
+            return new String(cipher.doFinal(ciphertext), StandardCharsets.UTF_8);
+        }
+        
+        // Fallback for reading old plaintext files during the transition
+        return new String(fileData, StandardCharsets.UTF_8);
+    }
+
+    // Generates the SHA-256 hash for a single file and returns it in hexadecimal format.
+    public static String generateHashFile(Path path) throws Exception {
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        try (InputStream input = Files.newInputStream(path)) {
+            byte[] buffer = new byte[4096];
+            int bytesRead;
+
+            while ((bytesRead = input.read(buffer)) != -1) {
+                digest.update(buffer, 0, bytesRead);
+            }
+        }
+
+        byte[] hashBytes = digest.digest();
+
+        // Converts bytes to lowercase hexadecimal string.
+        StringBuilder hexString = new StringBuilder();
+        for (byte b : hashBytes) {
+            hexString.append(String.format("%02x", b));
+        }
+        return hexString.toString();
+    }
+
+    // Backward-compatible overload for existing callers that provide String paths.
+    public static String generateHashFile(String path) throws Exception {
+        return generateHashFile(Paths.get(path));
+    }
+
+    //Generates .hash files for all regular files under server_data.
+    //Skips files that are already hash files.
+    public int generateHashesForServerData() {
+        Path serverDataRoot = projectRoot.resolve(SERVER_DATA_DIR).toAbsolutePath().normalize();
+        if (!Files.exists(serverDataRoot) || !Files.isDirectory(serverDataRoot)) {
+            return 0;
+        }
+
+        final int[] generated = {0};
+
+        try {
+            Files.walkFileTree(serverDataRoot, new SimpleFileVisitor<>() {
+                @Override
+                public FileVisitResult visitFile(Path filePath, BasicFileAttributes attrs) {
+                    if (!attrs.isRegularFile()) {
+                        return FileVisitResult.CONTINUE;
+                    }
+
+                    String fileName = filePath.getFileName().toString();
+                    if (fileName.endsWith(HASH_EXTENSION)) {
+                        return FileVisitResult.CONTINUE;
+                    }
+
+                    try {
+                        String hash = generateHashFile(filePath);
+                        Path hashPath = filePath.resolveSibling(fileName + HASH_EXTENSION);
+                        Files.writeString(hashPath, hash + System.lineSeparator());
+                        generated[0]++;
+                    } catch (Exception e) {
+                        System.err.println("Erro ao gerar hash para " + filePath + ": " + e.getMessage());
+                    }
+
+                    return FileVisitResult.CONTINUE;
+                }
+            });
+        } catch (IOException e) {
+            System.err.println("Erro ao percorrer ficheiros para gerar hashes: " + e.getMessage());
+        }
+
+        return generated[0];
+    }
+
+    //Verify integrity **after** decryption. Crucial:** If verification fails at any point, print `NOK-INTEGRITY` and terminate immediately.
+    public static void verifyIntegrity(String path) throws Exception{
+        String newHash = ServerFileManager.generateHashFile(path);
+        
+        try(BufferedReader reader = new BufferedReader(new FileReader(path + ".hash"))){
+            String hashSaved = reader.readLine();
+            if(hashSaved != null){
+                hashSaved = hashSaved.trim();
+            }
+            if(!newHash.equals(hashSaved)){
+                System.out.println("NOK-INTEGRITY");
+                System.exit(1);
+            }else{
+                System.out.println("OK");
+            }
+        }catch(IOException e){
+            System.out.println("NOK-INTEGRITY");
+            System.exit(1);        
+        }
+    }
+
+
 
     //Initializes and validates all file paths based on project structure.
     private void initializeFilePaths() {
@@ -150,20 +329,21 @@ public class ServerFileManager {
     public Map<String, String> loadUsers() {
         Map<String, String> users = new HashMap<>();
 
-        try (BufferedReader reader = new BufferedReader(new FileReader(usersFile))) {
-            String line;
+        try {
+            String content = readProtectedFile(Paths.get(usersFile));
+            if (content.isEmpty()) return users;
+
+            String[] lines = content.split("\\r?\\n");
             boolean firstLine = true;
 
-            while ((line = reader.readLine()) != null) {
+            for (String line : lines) {
                 if (firstLine) {
                     firstLine = false;
                     continue;
                 }
 
                 line = line.trim();
-                if (line.isEmpty()) {
-                    continue;
-                }
+                if (line.isEmpty()) continue;
 
                 String[] parts = line.split(DELIMITER, 2);
                 if (parts.length == 2) {
@@ -174,7 +354,7 @@ public class ServerFileManager {
                     }
                 }
             }
-        } catch (IOException e) {
+        } catch (Exception e) {
             System.err.println("Erro ao ler " + usersFile + ": " + e.getMessage());
             System.exit(-1);
         }
@@ -186,23 +366,26 @@ public class ServerFileManager {
     /**
      * Loads all houses from the houses file into a Map.
      */
-    public Map<String, String> loadHouses() {
+public Map<String, String> loadHouses() {
         Map<String, String> houses = new HashMap<>();
 
-        try (BufferedReader reader = new BufferedReader(new FileReader(housesFile))) {
-            String line;
+        try {
+            String content = readProtectedFile(Paths.get(housesFile));
+            if (content.isEmpty())
+                return houses;
+
+            String[] lines = content.split("\\r?\\n");
             boolean firstLine = true;
 
-            while ((line = reader.readLine()) != null) {
+            for (String line : lines) {
                 if (firstLine) {
                     firstLine = false;
                     continue;
                 }
 
                 line = line.trim();
-                if (line.isEmpty()) {
+                if (line.isEmpty())
                     continue;
-                }
 
                 String[] parts = line.split(DELIMITER, 2);
                 if (parts.length == 2) {
@@ -213,7 +396,7 @@ public class ServerFileManager {
                     }
                 }
             }
-        } catch (IOException e) {
+        } catch (Exception e) {
             System.err.println("ERRO ao ler " + housesFile + ": " + e.getMessage());
         }
 
@@ -228,20 +411,21 @@ public class ServerFileManager {
     public Map<String, Map<String, String>> loadPermissions() {
         Map<String, Map<String, String>> permissions = new HashMap<>();
 
-        try (BufferedReader reader = new BufferedReader(new FileReader(permissionsFile))) {
-            String line;
+        try {
+            String content = readProtectedFile(Paths.get(permissionsFile));
+            if (content.isEmpty()) return permissions;
+
+            String[] lines = content.split("\\r?\\n");
             boolean firstLine = true;
 
-            while ((line = reader.readLine()) != null) {
+            for (String line : lines) {
                 if (firstLine) {
                     firstLine = false;
                     continue;
                 }
 
                 line = line.trim();
-                if (line.isEmpty()) {
-                    continue;
-                }
+                if (line.isEmpty()) continue;
 
                 String[] parts = line.split(DELIMITER, 3);
                 if (parts.length == 3) {
@@ -258,7 +442,7 @@ public class ServerFileManager {
                     }
                 }
             }
-        } catch (IOException e) {
+        } catch (Exception e) {
             System.err.println("Aviso ao ler " + permissionsFile + ": " + e.getMessage());
         }
 
@@ -440,10 +624,21 @@ public class ServerFileManager {
      * Thread-safe operation.
      */
     public synchronized void appendUser(String user, String pass) {
-        try (BufferedWriter writer = new BufferedWriter(new FileWriter(usersFile, true))) {
-            writer.newLine();
-            writer.write(user + DELIMITER + pass);
-        } catch (IOException e) {
+        try {
+            Path path = Paths.get(usersFile);
+            String content = readProtectedFile(path);
+            
+            // If the file is completely empty, make sure to add a header first
+            if (content.trim().isEmpty()) {
+                content = "User:Password"; 
+            }
+            
+            content += System.lineSeparator() + user + DELIMITER + pass;
+            
+            // Re-encrypt and save the entire file
+            writeProtectedFile(path, content);
+            
+        } catch (Exception e) {
             System.err.println("Erro ao escrever em " + usersFile + ": " + e.getMessage());
         }
     }
