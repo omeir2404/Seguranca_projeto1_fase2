@@ -65,6 +65,7 @@ public class ServerFileManager {
     private static final String STATES_DIR = "states";
     private static final String HOMES_DIR = "homes";
     private static final String USERS_FILENAME = "users.txt";
+    private static final String USERS_HEADER = "User:Hash:Salt";
     private static final String HOUSES_FILENAME = "homes_registry.txt";
     private static final String PERMISSIONS_FILENAME = "permissions.txt";
     private static final String HOUSE_METADATA_FILENAME = "house_metadata.txt";
@@ -345,12 +346,13 @@ public class ServerFileManager {
                 line = line.trim();
                 if (line.isEmpty()) continue;
 
-                String[] parts = line.split(DELIMITER, 2);
-                if (parts.length == 2) {
+                String[] parts = line.split(DELIMITER, 3);
+                if (parts.length == 3) {
                     String user = parts[0].trim();
-                    String pass = parts[1].trim();
+                    String hash = parts[1].trim();
+                    String salt = parts[2].trim();
                     if (!user.isEmpty()) {
-                        users.put(user, pass);
+                        users.put(user, hash + DELIMITER + salt);
                     }
                 }
             }
@@ -623,17 +625,17 @@ public Map<String, String> loadHouses() {
      * Appends a new user to the users file.
      * Thread-safe operation.
      */
-    public synchronized void appendUser(String user, String pass) {
+    public synchronized void appendUser(String user, String passHash, String saltHex) {
         try {
             Path path = Paths.get(usersFile);
             String content = readProtectedFile(path);
             
             // If the file is completely empty, make sure to add a header first
             if (content.trim().isEmpty()) {
-                content = "User:Password"; 
+                content = USERS_HEADER;
             }
             
-            content += System.lineSeparator() + user + DELIMITER + pass;
+            content += System.lineSeparator() + user + DELIMITER + passHash + DELIMITER + saltHex;
             
             // Re-encrypt and save the entire file
             writeProtectedFile(path, content);

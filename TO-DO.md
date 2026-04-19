@@ -21,9 +21,9 @@ To ensure you hit every requirement for the final submission on **April 24th**, 
     * [x] Generate a **SHA256** hash for every file and store it in a corresponding `.hash` file.
     * [x] Verify integrity **after** decryption.
     * [x] **Crucial:** If verification fails at any point, print `NOK-INTEGRITY` and terminate immediately.
-* [ ] **Secure Password Storage:**
-    * [ ] Transition from clear-text to storing `<user-id>:<hash(password || salt)>:<salt>` using **SHA256**.
-    * [ ] Recalculate and compare hashes for authentication.
+* [x] **Secure Password Storage:**
+    * [x] Transition from clear-text to storing `<user-id>:<hash(password || salt)>:<salt>` using **SHA256**.
+    * [x] Recalculate and compare hashes for authentication.
 
 ---
 

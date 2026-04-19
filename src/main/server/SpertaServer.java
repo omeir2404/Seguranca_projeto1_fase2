@@ -11,6 +11,7 @@ import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
@@ -42,6 +43,7 @@ public class SpertaServer extends Thread {
 	private static String keystorePath;
 	private static String keystorePass;
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+    private static final int USER_SALT_BYTES = 16;
 
     // ============ INITIALIZATION METHODS ============
 
@@ -67,6 +69,80 @@ public class SpertaServer extends Thread {
         }
         return 0;
     }
+
+	//Secure Password Storage:
+	private static String bytesToHexadecimal(byte[] bytes) {
+		StringBuilder sb = new StringBuilder(bytes.length * 2); //1 Byte tem 2 caracteres hexadecimais
+		for (byte b : bytes) {
+			sb.append(String.format("%02x", b));
+		}
+		return sb.toString();
+	}
+
+	//Transition from clear-text to storing <user-id>:<hash(password || salt)>:<salt> using SHA256.
+	private static byte[] hexadecimalToBytes(String hex) {
+		if (hex == null || (hex.length() % 2) != 0) {
+			return null;
+		}
+
+		byte[] bytes = new byte[hex.length() / 2];
+		for (int i = 0; i < hex.length(); i += 2) {
+			int high = Character.digit(hex.charAt(i), 16);
+			int low = Character.digit(hex.charAt(i + 1), 16);
+			if (high < 0 || low < 0) {
+				return null;
+			}
+			bytes[i / 2] = (byte) ((high << 4) + low);
+		}
+		return bytes;
+	}
+
+	private static String hashPasswordWithSalt(String password, byte[] salt) {
+		try {
+			MessageDigest digest = MessageDigest.getInstance("SHA-256"); //Cria hash com SHA-256
+			digest.update(password.getBytes(StandardCharsets.UTF_8)); //Adiciona a password
+			digest.update(salt);
+			return bytesToHexadecimal(digest.digest());
+		} catch (Exception e) {
+			throw new IllegalStateException("Falha ao calcular hash da password.", e);
+		}
+	}
+
+	private static String buildStoredCredential(String password) {
+		byte[] salt = new byte[USER_SALT_BYTES];
+		SECURE_RANDOM.nextBytes(salt);
+		String saltHex = bytesToHexadecimal(salt); //converte salt para texto
+		String hashHex = hashPasswordWithSalt(password, salt); //Calcula hashPassword + Salt
+		return hashHex + ":" + saltHex; //Formato final hash:salt
+	}
+
+	//Recalculate and compare hashes for authentication.
+	private static boolean verifyPassword(String passwordCandidata, String credencialGuardada) {
+		if (passwordCandidata == null || credencialGuardada == null) {
+			return false;
+		}
+		String[] parts = credencialGuardada.split(":", 2);
+		if (parts.length != 2) {
+			return false;
+		}
+
+		String hashHex = parts[0].trim();
+		String saltHex = parts[1].trim();
+
+		byte[] salt = hexadecimalToBytes(saltHex);
+		byte[] storedHash = hexadecimalToBytes(hashHex);
+		if (salt == null || storedHash == null) {
+			return false;
+		}
+
+		String candidateHashHex = hashPasswordWithSalt(passwordCandidata, salt);
+		byte[] candidateHash = hexadecimalToBytes(candidateHashHex);
+		if (candidateHash == null) {
+			return false;
+		}
+
+		return MessageDigest.isEqual(storedHash, candidateHash);
+	}
 
     public static void initialize_server_vars() {
 		fileManager.initCrypto(cipherPassword);
@@ -186,18 +262,22 @@ public class SpertaServer extends Thread {
 				return -1;
 			}
 
-			String storedPass = users.get(user);
-			if (storedPass == null) {
-				users.put(user, pass);
-				fileManager.appendUser(user, pass);
+////////////////////////////////////////////////////////7
+			String storedCredential = users.get(user);
+			if (storedCredential == null) {
+				String newStoredCredential = buildStoredCredential(pass);
+				users.put(user, newStoredCredential);
+				String[] credentialParts = newStoredCredential.split(":", 2);
+				fileManager.appendUser(user, credentialParts[0], credentialParts[1]);
 				return 1;
 			}
-			if (storedPass.equals(pass)) {
+			if (verifyPassword(pass, storedCredential)) {
 				correct = 0;
 			}
 
 			return correct;
 		}
+		/////////////////////////////////////////////////77
 
 		private byte[] calculateAttestationHash(long nonce, Path referenceJarPath) throws IOException {
 			try {
@@ -239,7 +319,7 @@ public class SpertaServer extends Thread {
 		private String authenticateClient() throws IOException {
 			String user = (String) network.receive();
 			String passwd = (String) network.receive();
-			System.out.println("Utilizador: " + user + "; Password: " + passwd);
+			System.out.println("Tentativa de autenticacao do utilizador: " + user);
 
 			int authenticated = clientInFile(user, passwd);
 			if (user != null && !user.isEmpty() && authenticated >= 0) {
@@ -258,7 +338,7 @@ public class SpertaServer extends Thread {
 			network.send("WRONG-PWD");
 
 			passwd = (String) network.receive();
-			System.out.println("Password recebida: " + passwd);
+			System.out.println("Nova tentativa de password para o utilizador: " + user);
 			authenticated = clientInFile(user, passwd);
 			if (authenticated >= 0) {
 				if (!activeUsers.add(user)) {
