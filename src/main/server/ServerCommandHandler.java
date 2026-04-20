@@ -994,6 +994,253 @@ public void RH_sendFile(String house, String device) {
         return "OK";
     }
 
+    private static final class Rt2Entry {
+        final String device;
+        final String section;
+        final String ivB64;
+        final String ciphertextB64;
+
+        Rt2Entry(String device, String section, String ivB64, String ciphertextB64) {
+            this.device = device;
+            this.section = section;
+            this.ivB64 = ivB64;
+            this.ciphertextB64 = ciphertextB64;
+        }
+    }
+
+    private static final class Rh2Entry {
+        final String timestamp;
+        final String ivB64;
+        final String ciphertextB64;
+
+        Rh2Entry(String timestamp, String ivB64, String ciphertextB64) {
+            this.timestamp = timestamp;
+            this.ivB64 = ivB64;
+            this.ciphertextB64 = ciphertextB64;
+        }
+    }
+
+    private List<Rt2Entry> collectRt2Entries(String house, String user) {
+        List<Rt2Entry> entries = new ArrayList<>();
+        Map<String, ServerFileManager.EncryptedLastCommand> encrypted = fileManager.loadEncryptedLastCommandsByHouse(house);
+        if (encrypted.isEmpty()) {
+            return entries;
+        }
+
+        List<String> devices = new ArrayList<>(encrypted.keySet());
+        Collections.sort(devices);
+        for (String device : devices) {
+            if (!hasDeviceAccess(house, user, device)) {
+                continue;
+            }
+
+            String section = getStoredDeviceSection(house, device);
+            if (section == null || section.isBlank()) {
+                section = deviceSection(device);
+            }
+            String sectionName = normalizeSectionName(section);
+            if (sectionName == null || sectionName.equalsIgnoreCase("all")) {
+                continue;
+            }
+
+            ServerFileManager.EncryptedLastCommand value = encrypted.get(device);
+            if (value == null) {
+                continue;
+            }
+            entries.add(new Rt2Entry(device, sectionName, value.ivB64, value.ciphertextB64));
+        }
+
+        return entries;
+    }
+
+    public String RT2(String house, String user) {
+        if (!houses.containsKey(house)) {
+            return "NOHM";
+        }
+        if (!hasHouseAccess(house, user)) {
+            return "NOPERM";
+        }
+
+        List<Rt2Entry> entries = collectRt2Entries(house, user);
+        if (entries.isEmpty()) {
+            return "NODATA";
+        }
+
+        String owner = houses.get(house);
+        Set<String> requiredSections = new LinkedHashSet<>();
+        for (Rt2Entry entry : entries) {
+            requiredSections.add(entry.section);
+        }
+        for (String section : requiredSections) {
+            byte[] wrapped = fileManager.loadWrappedSectionKey(house, section, owner, user);
+            if (wrapped == null || wrapped.length == 0) {
+                return "NOKEY";
+            }
+        }
+
+        return "OK";
+    }
+
+    public void RT2_sendFile(String house, String user) {
+        List<Rt2Entry> entries = collectRt2Entries(house, user);
+        String owner = houses.get(house);
+        Map<String, String> wrappedPerSection = new LinkedHashMap<>();
+        for (Rt2Entry entry : entries) {
+            wrappedPerSection.computeIfAbsent(entry.section, section -> {
+                byte[] wrapped = fileManager.loadWrappedSectionKey(house, section, owner, user);
+                if (wrapped == null || wrapped.length == 0) {
+                    return null;
+                }
+                return Base64.getEncoder().encodeToString(wrapped);
+            });
+        }
+
+        StringBuilder payload = new StringBuilder();
+        payload.append("RT2").append(System.lineSeparator());
+        for (Map.Entry<String, String> keyEntry : wrappedPerSection.entrySet()) {
+            if (keyEntry.getValue() == null) {
+                continue;
+            }
+            payload.append("KEY ")
+                    .append(keyEntry.getKey())
+                    .append(" ")
+                    .append(keyEntry.getValue())
+                    .append(System.lineSeparator());
+        }
+        for (Rt2Entry entry : entries) {
+            payload.append("DATA ")
+                    .append(entry.device)
+                    .append(" ")
+                    .append(entry.section)
+                    .append(" ")
+                    .append(entry.ivB64)
+                    .append(" ")
+                    .append(entry.ciphertextB64)
+                    .append(System.lineSeparator());
+        }
+
+        byte[] bytes = payload.toString().getBytes(StandardCharsets.UTF_8);
+        try (InputStream is = new ByteArrayInputStream(bytes);
+             SequenceInputStream sis = new SequenceInputStream(Collections.enumeration(Collections.singletonList(is)))) {
+            serverNetwork.send("OK");
+            serverNetwork.sendFile(sis, bytes.length);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private List<Rh2Entry> collectRh2Entries(String house, String device) {
+        List<Rh2Entry> entries = new ArrayList<>();
+        Path logPath = getDeviceLogPath(house, device);
+        try {
+            String content = fileManager.readProtectedFile(logPath);
+            if (content.isBlank()) {
+                return entries;
+            }
+
+            String[] lines = content.split("\\r?\\n");
+            for (String rawLine : lines) {
+                String line = rawLine.trim();
+                if (line.isEmpty() || line.startsWith("time;")) {
+                    continue;
+                }
+
+                String[] csv = line.split(";", 2);
+                if (csv.length != 2) {
+                    continue;
+                }
+
+                String timestamp = csv[0].trim();
+                String command = csv[1].trim();
+                String[] parts = command.split("\\s+");
+                if (parts.length != 5 || !"EC2".equalsIgnoreCase(parts[0])) {
+                    continue;
+                }
+                if (!house.equals(parts[1]) || !device.equalsIgnoreCase(parts[2])) {
+                    continue;
+                }
+
+                entries.add(new Rh2Entry(timestamp, parts[3], parts[4]));
+            }
+        } catch (Exception e) {
+            return entries;
+        }
+
+        return entries;
+    }
+
+    public String RH2(String house, String user, String device) {
+        String normalizedDevice = device == null ? null : device.toUpperCase(Locale.ROOT);
+        if (!houses.containsKey(house)) {
+            return "NOHM";
+        }
+        if (!hasDeviceAccess(house, user, normalizedDevice)) {
+            return "NOPERM";
+        }
+        Map<String, Integer> devices = deviceState.get(house);
+        if (devices == null || !devices.containsKey(normalizedDevice)) {
+            return "NOD";
+        }
+
+        List<Rh2Entry> entries = collectRh2Entries(house, normalizedDevice);
+        if (entries.isEmpty()) {
+            return "NODATA";
+        }
+
+        String section = getStoredDeviceSection(house, normalizedDevice);
+        if (section == null || section.isBlank()) {
+            section = deviceSection(normalizedDevice);
+        }
+        String sectionName = normalizeSectionName(section);
+        if (sectionName == null || sectionName.equalsIgnoreCase("all")) {
+            return "NOK";
+        }
+
+        String owner = houses.get(house);
+        byte[] wrapped = fileManager.loadWrappedSectionKey(house, sectionName, owner, user);
+        if (wrapped == null || wrapped.length == 0) {
+            return "NOKEY";
+        }
+
+        return "OK";
+    }
+
+    public void RH2_sendFile(String house, String user, String device) {
+        String normalizedDevice = device == null ? null : device.toUpperCase(Locale.ROOT);
+        String section = getStoredDeviceSection(house, normalizedDevice);
+        if (section == null || section.isBlank()) {
+            section = deviceSection(normalizedDevice);
+        }
+        String sectionName = normalizeSectionName(section);
+        String owner = houses.get(house);
+        byte[] wrapped = fileManager.loadWrappedSectionKey(house, sectionName, owner, user);
+        String wrappedB64 = wrapped == null ? "" : Base64.getEncoder().encodeToString(wrapped);
+
+        List<Rh2Entry> entries = collectRh2Entries(house, normalizedDevice);
+
+        StringBuilder payload = new StringBuilder();
+        payload.append("RH2 ").append(house).append(" ").append(normalizedDevice).append(System.lineSeparator());
+        payload.append("KEY ").append(sectionName).append(" ").append(wrappedB64).append(System.lineSeparator());
+        for (Rh2Entry entry : entries) {
+            payload.append("H ")
+                    .append(entry.timestamp)
+                    .append(" ")
+                    .append(entry.ivB64)
+                    .append(" ")
+                    .append(entry.ciphertextB64)
+                    .append(System.lineSeparator());
+        }
+
+        byte[] bytes = payload.toString().getBytes(StandardCharsets.UTF_8);
+        try (InputStream is = new ByteArrayInputStream(bytes);
+             SequenceInputStream sis = new SequenceInputStream(Collections.enumeration(Collections.singletonList(is)))) {
+            serverNetwork.send("OK");
+            serverNetwork.sendFile(sis, bytes.length);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
 //////////////////////////FUNÇÕES AUXILIARES/////////////////////////////////////////
 
 
@@ -1077,6 +1324,18 @@ public void RH_sendFile(String house, String device) {
                     return "ERRO: O correto é: RH <hm> <d>";
                 }
                 return historic(parts[1], user, parts[2]);
+
+            case "RT2":
+                if (parts.length != 2) {
+                    return "ERRO: O correto e: RT2 <hm>";
+                }
+                return RT2(parts[1], user);
+
+            case "RH2":
+                if (parts.length != 3) {
+                    return "ERRO: O correto e: RH2 <hm> <d>";
+                }
+                return RH2(parts[1], user, parts[2]);
 
             case "RT":
                 if (parts.length != 2) {

@@ -436,12 +436,31 @@ public class SpertaServer extends Thread {
 					} else {
 						network.send(response);
 					}
+				} else if (parts[0].equalsIgnoreCase("RH2")) {
+					if (response.equals("OK")) {
+						System.out.println("RH2 RETURNED OK");
+						String house = parts[1];
+						String device = parts[2];
+						System.out.printf("RH2: house=%s, device=%s%n", house, device);
+						commandHandler.RH2_sendFile(house, user, device);
+					} else {
+						network.send(response);
+					}
 				} else if (parts[0].equalsIgnoreCase("RT")) {
 					if (response.equals("OK")) {
 						System.out.println("RT RETURNED OK");
 						String house = parts[1];
 						System.out.printf("RT: house=%s%n", house);
 						commandHandler.RT_sendFile(house, user);
+					} else {
+						network.send(response);
+					}
+				} else if (parts[0].equalsIgnoreCase("RT2")) {
+					if (response.equals("OK")) {
+						System.out.println("RT2 RETURNED OK");
+						String house = parts[1];
+						System.out.printf("RT2: house=%s%n", house);
+						commandHandler.RT2_sendFile(house, user);
 					} else {
 						network.send(response);
 					}

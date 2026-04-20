@@ -24,7 +24,9 @@ import java.security.cert.Certificate;
 import java.security.cert.CertificateFactory;
 import java.util.Base64;
 import java.util.Enumeration;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Scanner;
 
@@ -43,7 +45,9 @@ public class SpertaClient {
             " - EC <hm> <d> <int> # Enviar valor <int> de estado/temporizacao do dispositivo <d> da casa <hm> para o servidor",
             " - EC2 <hm> <d> <int> # Enviar valor cifrado fim-a-fim para o dispositivo <d> da casa <hm>",
             " - RT <hm> # Receber a informacao do ultimo comando enviado a cada dispositivo da casa <hm> (com permissoes)",
+            " - RT2 <hm> # Receber informacao cifrada e decifrar localmente no cliente",
             " - RH <hm> <d> # Receber o historico (ficheiro .csv) de comandos enviados ao dispositivo <d> da casa <hm> (com permissoes)",
+            " - RH2 <hm> <d> # Receber historico cifrado e decifrar localmente no cliente",
             " - EXIT ou QUIT # Terminar a ligacao ao servidor e fechar o cliente",
             " - LS ou LS <hm> # Listar casas com acesso, ou listar dispositivos e temporizadores de uma casa <hm>");
     private static ClientNetwork network;
@@ -259,6 +263,21 @@ public class SpertaClient {
                     } else {
                         System.out.println("Erro ao receber ficheiro RT.");
                     }
+                } else if ("OK".equals(response) && "RT2".equals(commandName) && parts.length == 2) {
+                    String house = parts[1];
+                    Path encryptedOut = Paths.get("client_data", userId, "status2_" + house + ".enc");
+                    Path plainOut = Paths.get("client_data", userId, "status2_" + house + ".txt");
+                    long sizeBytes = network.receiveFile(encryptedOut);
+                    if (sizeBytes >= 0) {
+                        if (processRt2Payload(encryptedOut, plainOut, userId, house)) {
+                            System.out.println("OK");
+                            System.out.println("Ficheiro RT2 decifrado: " + plainOut);
+                        } else {
+                            System.out.println("Erro ao decifrar ficheiro RT2.");
+                        }
+                    } else {
+                        System.out.println("Erro ao receber ficheiro RT2.");
+                    }
                 } else if ("OK".equals(response) && "RH".equals(commandName) && parts.length == 3) {
                     String house = parts[1];
                     String device = parts[2];
@@ -270,6 +289,22 @@ public class SpertaClient {
                         System.out.println("Ficheiro RH recebido: " + out);
                     } else {
                         System.out.println("Erro ao receber ficheiro RH.");
+                    }
+                } else if ("OK".equals(response) && "RH2".equals(commandName) && parts.length == 3) {
+                    String house = parts[1];
+                    String device = parts[2].toUpperCase();
+                    Path encryptedOut = Paths.get("client_data", userId, "history2_" + device + "_" + house + ".enc");
+                    Path plainOut = Paths.get("client_data", userId, "history2_" + device + "_" + house + ".csv");
+                    long sizeBytes = network.receiveFile(encryptedOut);
+                    if (sizeBytes >= 0) {
+                        if (processRh2Payload(encryptedOut, plainOut, userId, house, device)) {
+                            System.out.println("OK");
+                            System.out.println("Ficheiro RH2 decifrado: " + plainOut);
+                        } else {
+                            System.out.println("Erro ao decifrar ficheiro RH2.");
+                        }
+                    } else {
+                        System.out.println("Erro ao receber ficheiro RH2.");
                     }
                 } else {
                     System.out.println(response);
@@ -446,6 +481,127 @@ public class SpertaClient {
                 Base64.getEncoder().encodeToString(iv),
                 Base64.getEncoder().encodeToString(ciphertext)
         };
+    }
+
+    private String decryptEc2Value(String ivB64, String ciphertextB64, SecretKey sectionKey) throws Exception {
+        byte[] iv = Base64.getDecoder().decode(ivB64);
+        byte[] ciphertext = Base64.getDecoder().decode(ciphertextB64);
+
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        cipher.init(Cipher.DECRYPT_MODE, sectionKey, new GCMParameterSpec(128, iv));
+        byte[] plain = cipher.doFinal(ciphertext);
+        return new String(plain, StandardCharsets.UTF_8).trim();
+    }
+
+    private SecretKey resolveSectionKey(String section, String wrappedB64, Map<String, SecretKey> keyCache, PrivateKey privateKey) throws Exception {
+        SecretKey cached = keyCache.get(section);
+        if (cached != null) {
+            return cached;
+        }
+        if (wrappedB64 == null || wrappedB64.isBlank()) {
+            return null;
+        }
+        byte[] wrapped = Base64.getDecoder().decode(wrappedB64);
+        SecretKey sectionKey = unwrapSectionKey(wrapped, privateKey);
+        keyCache.put(section, sectionKey);
+        return sectionKey;
+    }
+
+    private boolean processRt2Payload(Path encryptedPath, Path plainOut, String userId, String house) {
+        try {
+            List<String> lines = Files.readAllLines(encryptedPath, StandardCharsets.UTF_8);
+            Map<String, String> wrappedKeys = new LinkedHashMap<>();
+            List<String> outputLines = new ArrayList<>();
+            Map<String, SecretKey> keyCache = new LinkedHashMap<>();
+            PrivateKey privateKey = loadUserPrivateKey(userId);
+            if (privateKey == null) {
+                return false;
+            }
+
+            for (String rawLine : lines) {
+                String line = rawLine.trim();
+                if (line.isEmpty() || "RT2".equalsIgnoreCase(line)) {
+                    continue;
+                }
+
+                String[] parts = line.split("\\s+");
+                if (parts.length >= 3 && "KEY".equalsIgnoreCase(parts[0])) {
+                    wrappedKeys.put(parts[1], parts[2]);
+                    continue;
+                }
+
+                if (parts.length == 5 && "DATA".equalsIgnoreCase(parts[0])) {
+                    String device = parts[1];
+                    String section = parts[2];
+                    String ivB64 = parts[3];
+                    String ciphertextB64 = parts[4];
+
+                    SecretKey sectionKey = resolveSectionKey(section, wrappedKeys.get(section), keyCache, privateKey);
+                    if (sectionKey == null) {
+                        return false;
+                    }
+
+                    String value = decryptEc2Value(ivB64, ciphertextB64, sectionKey);
+                    outputLines.add("EC " + house + " " + device + " " + value);
+                }
+            }
+
+            Path parent = plainOut.getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
+            Files.write(plainOut, outputLines, StandardCharsets.UTF_8);
+            Files.deleteIfExists(encryptedPath);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private boolean processRh2Payload(Path encryptedPath, Path plainOut, String userId, String house, String device) {
+        try {
+            List<String> lines = Files.readAllLines(encryptedPath, StandardCharsets.UTF_8);
+            String section = null;
+            String wrappedB64 = null;
+            List<String> outputLines = new ArrayList<>();
+            outputLines.add("time; command");
+
+            for (String rawLine : lines) {
+                String line = rawLine.trim();
+                if (line.isEmpty() || line.startsWith("RH2 ")) {
+                    continue;
+                }
+                String[] parts = line.split("\\s+");
+                if (parts.length >= 3 && "KEY".equalsIgnoreCase(parts[0])) {
+                    section = parts[1];
+                    wrappedB64 = parts[2];
+                    continue;
+                }
+
+                if (parts.length == 4 && "H".equalsIgnoreCase(parts[0])) {
+                    if (section == null || wrappedB64 == null || wrappedB64.isBlank()) {
+                        return false;
+                    }
+                    PrivateKey privateKey = loadUserPrivateKey(userId);
+                    if (privateKey == null) {
+                        return false;
+                    }
+                    SecretKey sectionKey = unwrapSectionKey(Base64.getDecoder().decode(wrappedB64), privateKey);
+                    String value = decryptEc2Value(parts[2], parts[3], sectionKey);
+                    outputLines.add(parts[1] + ";EC " + house + " " + device + " " + value);
+                }
+            }
+
+            Path parent = plainOut.getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
+            Files.write(plainOut, outputLines, StandardCharsets.UTF_8);
+            Files.deleteIfExists(encryptedPath);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     private void handleEc2Command(String userId, String house, String device, String valueStr) {

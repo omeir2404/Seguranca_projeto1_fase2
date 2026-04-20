@@ -54,6 +54,20 @@ import javax.crypto.spec.SecretKeySpec;
  */
 public class ServerFileManager {
 
+    public static final class EncryptedLastCommand {
+        public final String house;
+        public final String device;
+        public final String ivB64;
+        public final String ciphertextB64;
+
+        public EncryptedLastCommand(String house, String device, String ivB64, String ciphertextB64) {
+            this.house = house;
+            this.device = device;
+            this.ivB64 = ivB64;
+            this.ciphertextB64 = ciphertextB64;
+        }
+    }
+
     private static final String DELIMITER = ":";
     private static final String CSV_EXTENSION = ".csv";
     private static final String HASH_EXTENSION = ".hash";
@@ -836,6 +850,56 @@ public Map<String, String> loadHouses() {
             System.err.println("Erro ao persistir estado cifrado EC2: " + e.getMessage());
             return false;
         }
+    }
+
+    public synchronized Map<String, EncryptedLastCommand> loadEncryptedLastCommandsByHouse(String house) {
+        Map<String, EncryptedLastCommand> result = new LinkedHashMap<>();
+        if (house == null || house.isBlank()) {
+            return result;
+        }
+
+        try {
+            Path target = Paths.get(lastCommandsEc2File).toAbsolutePath().normalize();
+            String content = readProtectedFile(target);
+            if (content.isBlank()) {
+                return result;
+            }
+
+            String[] lines = content.split("\\r?\\n");
+            for (int i = 1; i < lines.length; i++) {
+                String line = lines[i].trim();
+                if (line.isEmpty()) {
+                    continue;
+                }
+
+                String[] parts = line.split(":", 4);
+                if (parts.length != 4) {
+                    continue;
+                }
+
+                String lineHouse = parts[0].trim();
+                String device = parts[1].trim();
+                String ivB64 = parts[2].trim();
+                String ciphertextB64 = parts[3].trim();
+                if (!lineHouse.equals(house) || device.isEmpty() || ivB64.isEmpty() || ciphertextB64.isEmpty()) {
+                    continue;
+                }
+
+                result.put(device, new EncryptedLastCommand(lineHouse, device, ivB64, ciphertextB64));
+            }
+        } catch (Exception e) {
+            System.err.println("Erro ao carregar estado cifrado EC2: " + e.getMessage());
+        }
+
+        return result;
+    }
+
+    public synchronized EncryptedLastCommand loadEncryptedLastCommand(String house, String device) {
+        if (device == null || device.isBlank()) {
+            return null;
+        }
+        Map<String, EncryptedLastCommand> byHouse = loadEncryptedLastCommandsByHouse(house);
+        return byHouse.get(device);
     }
 
     // ============ UTILITY METHODS ============
