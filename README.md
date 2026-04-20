@@ -175,9 +175,11 @@ Ao registar dispositivo, o servidor cria IDs automaticamente por secção (`M1`,
 - `NOD`: dispositivo não existe.
 - `NOPERM`
 
+Observação: o valor não é guardado em claro no servidor. O cliente cifra o valor com a chave da secção e envia apenas payload cifrado.
+
 ### `RT <hm>`
 
-- `OK` + envio de ficheiro texto com estado atual dos dispositivos acessíveis.
+- `OK` + envio de ficheiro texto com estado atual dos dispositivos acessíveis, payload cifrado, decifrado localmente no cliente.
 - `NOHM`
 - `NOPERM`
 - `NODATA`: sem dispositivos acessíveis ou sem dados.
@@ -188,7 +190,7 @@ No cliente, o ficheiro é guardado em:
 
 ### `RH <hm> <d>`
 
-- `OK` + envio do ficheiro CSV de histórico do dispositivo.
+- `OK` + envio do ficheiro CSV de histórico do dispositivo, payload cifrado, decifrado localmente no cliente.
 - `NOHM`
 - `NOD`
 - `NOPERM`
@@ -214,6 +216,7 @@ server_data/
   auth/
     users.txt
     attestation.txt
+    certs/
   metadata/
     homes_registry.txt
     permissions.txt
@@ -223,6 +226,10 @@ server_data/
     houses.log
   states/
     last_commands.txt
+  keys/
+    <house>/
+      <section>/
+        key.<house>.<section>.<owner>.<recipient>.bin
   homes/
     <house>/
       <section>/

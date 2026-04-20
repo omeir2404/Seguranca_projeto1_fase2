@@ -19,7 +19,6 @@ import java.security.SecureRandom;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
-import javax.net.ssl.SSLServerSocket;
 import javax.net.ssl.SSLServerSocketFactory;
 
 public class SpertaServer extends Thread {
@@ -183,12 +182,9 @@ public class SpertaServer extends Thread {
 		keystorePass = args[firstCredentialArg + 2];
 
         SpertaServer server = new SpertaServer();
-        Runtime.getRuntime().addShutdownHook(new Thread(new Runnable() {
-            @Override
-            public void run() {
-                System.out.println("\nCTRL+C detetado. A fechar o servidor...");
-                server.closeServer();
-            }
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            System.out.println("\nCTRL+C detetado. A fechar o servidor...");
+            server.closeServer();
         }));
         server.startServer(port);
     }
@@ -301,7 +297,7 @@ public class SpertaServer extends Thread {
 			}
 
 			long nonce = SECURE_RANDOM.nextLong();
-			network.send(Long.valueOf(nonce));
+			network.send(nonce);
 
 			Object receivedProof = network.receive();
 			if (!(receivedProof instanceof byte[] receivedHash)) {
@@ -432,17 +428,7 @@ public class SpertaServer extends Thread {
 						String device = parts[2];
 						String house = parts[1];
 						System.out.printf("RH: house=%s, device=%s%n", house, device);
-						commandHandler.RH_sendFile(house, device);
-					} else {
-						network.send(response);
-					}
-				} else if (parts[0].equalsIgnoreCase("RH2")) {
-					if (response.equals("OK")) {
-						System.out.println("RH2 RETURNED OK");
-						String house = parts[1];
-						String device = parts[2];
-						System.out.printf("RH2: house=%s, device=%s%n", house, device);
-						commandHandler.RH2_sendFile(house, user, device);
+						commandHandler.RH_sendFile(house, user, device);
 					} else {
 						network.send(response);
 					}
@@ -452,15 +438,6 @@ public class SpertaServer extends Thread {
 						String house = parts[1];
 						System.out.printf("RT: house=%s%n", house);
 						commandHandler.RT_sendFile(house, user);
-					} else {
-						network.send(response);
-					}
-				} else if (parts[0].equalsIgnoreCase("RT2")) {
-					if (response.equals("OK")) {
-						System.out.println("RT2 RETURNED OK");
-						String house = parts[1];
-						System.out.printf("RT2: house=%s%n", house);
-						commandHandler.RT2_sendFile(house, user);
 					} else {
 						network.send(response);
 					}

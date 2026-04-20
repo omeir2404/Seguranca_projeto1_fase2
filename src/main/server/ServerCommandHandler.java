@@ -156,7 +156,6 @@ public class ServerCommandHandler {
     private synchronized void persistLastCommandValue(String house, String device, int value) {
         try {
             ensureFileHeader(LAST_COMMANDS_FILE, "Home:Device:Value");
-            Path statePath = Paths.get(LAST_COMMANDS_FILE).toAbsolutePath().normalize();
             List<String> lines = readLines(LAST_COMMANDS_FILE);
 
             if (lines.isEmpty()) {
@@ -331,7 +330,6 @@ public class ServerCommandHandler {
     private synchronized String allocateNextDeviceName(String house, String sectionLetter) {
         try {
             ensureFileHeader(COUNTERS_FILE, "House:Section=NextCounter");
-            Path countersPath = Paths.get(COUNTERS_FILE).toAbsolutePath().normalize();
             List<String> lines = readLines(COUNTERS_FILE);
             if (lines.isEmpty()) {
                 lines.add("House:Section=NextCounter");
@@ -525,23 +523,6 @@ public class ServerCommandHandler {
         return sections;
     }
 
-    private boolean sectionExistsInHouse(String house, String section) {
-        String normalizedSection = normalizeSectionName(section);
-        if (normalizedSection == null) {
-            return false;
-        }
-        if ("all".equalsIgnoreCase(normalizedSection)) {
-            return true;
-        }
-
-        for (String existing : getExistingSections(house)) {
-            if (existing.equalsIgnoreCase(normalizedSection)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     private boolean requestedSectionsExistInHouse(String house, String requestedSections) {
         String normalizedRequested = normalizePermissionValue(requestedSections);
         if (normalizedRequested == null) {
@@ -655,163 +636,6 @@ public class ServerCommandHandler {
         return "OK";
     }
 
-    // Método EC (Enviar valor)
-    public String sendInt(String user, String house, String device, String valueStr){
-        if (device != null) {
-            device = device.toUpperCase();
-        }
-        int value;
-        try {
-            value = Integer.parseInt(valueStr);
-        } catch (NumberFormatException e) {
-            return "NOK";
-        }
-        if (value < 0 || value > 600) {
-            return "NOK";
-        }
-        if (!houses.containsKey(house)) {
-            return "NOHM";
-        }
-        Map<String, Integer> devices = deviceState.get(house);
-        if (devices == null || !devices.containsKey(device)) {
-            return "NOD";
-        }
-        if (!hasDeviceAccess(house, user, device)) {
-            return "NOPERM";
-        }
-        devices.put(device, value);
-        persistLastCommandValue(house, device, value);
-
-        updateDeviceLogs("EC " + house + " " + device + " " + value, house, device);
-        return "OK";
-    }   
-
-
-    //Método RT (Obtém ficheiro de texto)
-    public String RT(String house, String user) {
-        if (!houses.containsKey(house)){
-            return "NOHM";
-        }
-        if (!hasHouseAccess(house, user)){
-            return "NOPERM"; 
-        } 
-        Map<String, Integer> devices = deviceState.get(house);
-        if (!hasAnyAccessibleDevice(devices, house, user)){
-            return "NODATA";
-        }
-
-        return "OK";
-    }
-
-    public void RT_sendFile(String house, String user) {
-        if (!houses.containsKey(house) || deviceState.get(house) == null){
-            return;
-        }
-
-        List<String> allowedDevices = new LinkedList<>();
-
-        for (String deviceName : deviceState.get(house).keySet()) {
-            if (hasDeviceAccess(house, user, deviceName)) {
-                allowedDevices.add(deviceName);
-            }
-        }
-
-        Collections.sort(allowedDevices);
-        File lineSeparatorFile = new File(Paths.get(LOG_DIR, "lineSeparator.txt").toString());
-        try {
-            ensureParentDir(lineSeparatorFile.getPath());
-            if (!lineSeparatorFile.exists()) {
-                Files.writeString(lineSeparatorFile.toPath(), System.lineSeparator(), StandardCharsets.UTF_8, StandardOpenOption.CREATE);
-            }
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-
-        List<InputStream> files = new LinkedList<>();
-        final long[] totalSize = {0};
-        Map<String, Integer> houseDevices = deviceState.get(house);
-        for (String deviceName : allowedDevices) {
-            try {
-                Integer currentValue = houseDevices.get(deviceName);
-                if (currentValue == null) {
-                    continue;
-                }
-
-                String line = "EC " + house + " " + deviceName + " " + currentValue;
-                byte[] lineBytes = line.getBytes(StandardCharsets.UTF_8);
-
-                files.add(new ByteArrayInputStream(lineBytes));
-                files.add(new FileInputStream(lineSeparatorFile));
-                totalSize[0] += lineBytes.length + lineSeparatorFile.length();
-            } catch (FileNotFoundException e) {
-                e.printStackTrace();
-            }
-        }
-
-        try (SequenceInputStream statusStream = new SequenceInputStream(Collections.enumeration(files))) {
-            serverNetwork.send("OK");
-            serverNetwork.sendFile(statusStream, totalSize[0]);
-
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-
-
-    }
-
-    // Método RH (Obter histórico)
-    public String historic(String house, String user, String device){
-        if (device != null) {
-            device = device.toUpperCase();
-        }
-        if(!houses.containsKey(house)){
-            return "NOHM";
-        }
-        if (!hasDeviceAccess(house, user, device)) {
-            return "NOPERM";
-        }
-        Map<String, Integer> devices = deviceState.get(house);
-        if (devices == null || !devices.containsKey(device)) {
-            return "NOD";
-        }
-        File logFile = getDeviceLogPath(house, device).toFile();
-        if (!logFile.exists()) {
-            System.out.println("Nenhum log encontrado para o dispositivo: " + device + " na casa: " + house);
-            return "NODATA";
-        }
-        
-        return "OK";
-    }
-
- 
-public void RH_sendFile(String house, String device) {
-        if (device != null) {
-            device = device.toUpperCase();
-        }
-
-        serverNetwork.send("OK");
-        Path logPath = getDeviceLogPath(house, device);
-        File logFile = logPath.toFile();
-        
-        if (logFile.exists()) {
-            try {
-                // Read and decrypt the file
-                String decryptedContent = fileManager.readProtectedFile(logPath);
-                byte[] bytes = decryptedContent.getBytes(StandardCharsets.UTF_8);
-                
-                // Wrap in streams so ServerNetwork.sendFile(SequenceInputStream) accepts it
-                InputStream is = new ByteArrayInputStream(bytes);
-                SequenceInputStream sis = new SequenceInputStream(Collections.enumeration(Arrays.asList(is)));
-                
-                serverNetwork.sendFile(sis, bytes.length);
-            } catch (Exception e) {
-                System.err.println("Erro a desencriptar log para envio: " + e.getMessage());
-            }
-        } else {
-            System.out.println("Nenhum log encontrado para o dispositivo: " + device + " na casa: " + house);
-        }
-    }
-
 
 // ################FUNÇÕES AUXILIARES################
 
@@ -915,7 +739,7 @@ public void RH_sendFile(String house, String device) {
         return "OK " + Base64.getEncoder().encodeToString(wrappedBytes);
     }
 
-    private String ec2RequestCommand(String requester, String house, String device) {
+    private String ecRequestCommand(String requester, String house, String device) {
         String normalizedDevice = device == null ? null : device.toUpperCase(Locale.ROOT);
         if (!houses.containsKey(house)) {
             return "NOHM";
@@ -952,7 +776,7 @@ public void RH_sendFile(String house, String device) {
         return "OK " + sectionName + " " + owner + " " + Base64.getEncoder().encodeToString(wrappedKey);
     }
 
-    private String ec2SendCommand(String requester, String house, String device, String ivB64, String ciphertextB64) {
+    private String ecSendCommand(String requester, String house, String device, String ivB64, String ciphertextB64) {
         String normalizedDevice = device == null ? null : device.toUpperCase(Locale.ROOT);
         if (!houses.containsKey(house)) {
             return "NOHM";
@@ -990,17 +814,17 @@ public void RH_sendFile(String house, String device) {
             return "NOK";
         }
 
-        updateDeviceLogs("EC2 " + house + " " + normalizedDevice + " " + ivB64 + " " + ciphertextB64, house, normalizedDevice);
+        updateDeviceLogs("EC " + house + " " + normalizedDevice + " " + ivB64 + " " + ciphertextB64, house, normalizedDevice);
         return "OK";
     }
 
-    private static final class Rt2Entry {
+    private static final class RtEntry {
         final String device;
         final String section;
         final String ivB64;
         final String ciphertextB64;
 
-        Rt2Entry(String device, String section, String ivB64, String ciphertextB64) {
+        RtEntry(String device, String section, String ivB64, String ciphertextB64) {
             this.device = device;
             this.section = section;
             this.ivB64 = ivB64;
@@ -1008,20 +832,20 @@ public void RH_sendFile(String house, String device) {
         }
     }
 
-    private static final class Rh2Entry {
+    private static final class RhEntry {
         final String timestamp;
         final String ivB64;
         final String ciphertextB64;
 
-        Rh2Entry(String timestamp, String ivB64, String ciphertextB64) {
+        RhEntry(String timestamp, String ivB64, String ciphertextB64) {
             this.timestamp = timestamp;
             this.ivB64 = ivB64;
             this.ciphertextB64 = ciphertextB64;
         }
     }
 
-    private List<Rt2Entry> collectRt2Entries(String house, String user) {
-        List<Rt2Entry> entries = new ArrayList<>();
+    private List<RtEntry> collectRtEntries(String house, String user) {
+        List<RtEntry> entries = new ArrayList<>();
         Map<String, ServerFileManager.EncryptedLastCommand> encrypted = fileManager.loadEncryptedLastCommandsByHouse(house);
         if (encrypted.isEmpty()) {
             return entries;
@@ -1047,13 +871,13 @@ public void RH_sendFile(String house, String device) {
             if (value == null) {
                 continue;
             }
-            entries.add(new Rt2Entry(device, sectionName, value.ivB64, value.ciphertextB64));
+            entries.add(new RtEntry(device, sectionName, value.ivB64, value.ciphertextB64));
         }
 
         return entries;
     }
 
-    public String RT2(String house, String user) {
+    public String RT(String house, String user) {
         if (!houses.containsKey(house)) {
             return "NOHM";
         }
@@ -1061,14 +885,14 @@ public void RH_sendFile(String house, String device) {
             return "NOPERM";
         }
 
-        List<Rt2Entry> entries = collectRt2Entries(house, user);
+        List<RtEntry> entries = collectRtEntries(house, user);
         if (entries.isEmpty()) {
             return "NODATA";
         }
 
         String owner = houses.get(house);
         Set<String> requiredSections = new LinkedHashSet<>();
-        for (Rt2Entry entry : entries) {
+        for (RtEntry entry : entries) {
             requiredSections.add(entry.section);
         }
         for (String section : requiredSections) {
@@ -1081,11 +905,11 @@ public void RH_sendFile(String house, String device) {
         return "OK";
     }
 
-    public void RT2_sendFile(String house, String user) {
-        List<Rt2Entry> entries = collectRt2Entries(house, user);
+    public void RT_sendFile(String house, String user) {
+        List<RtEntry> entries = collectRtEntries(house, user);
         String owner = houses.get(house);
         Map<String, String> wrappedPerSection = new LinkedHashMap<>();
-        for (Rt2Entry entry : entries) {
+        for (RtEntry entry : entries) {
             wrappedPerSection.computeIfAbsent(entry.section, section -> {
                 byte[] wrapped = fileManager.loadWrappedSectionKey(house, section, owner, user);
                 if (wrapped == null || wrapped.length == 0) {
@@ -1096,7 +920,7 @@ public void RH_sendFile(String house, String device) {
         }
 
         StringBuilder payload = new StringBuilder();
-        payload.append("RT2").append(System.lineSeparator());
+        payload.append("RT").append(System.lineSeparator());
         for (Map.Entry<String, String> keyEntry : wrappedPerSection.entrySet()) {
             if (keyEntry.getValue() == null) {
                 continue;
@@ -1107,7 +931,7 @@ public void RH_sendFile(String house, String device) {
                     .append(keyEntry.getValue())
                     .append(System.lineSeparator());
         }
-        for (Rt2Entry entry : entries) {
+        for (RtEntry entry : entries) {
             payload.append("DATA ")
                     .append(entry.device)
                     .append(" ")
@@ -1129,8 +953,8 @@ public void RH_sendFile(String house, String device) {
         }
     }
 
-    private List<Rh2Entry> collectRh2Entries(String house, String device) {
-        List<Rh2Entry> entries = new ArrayList<>();
+    private List<RhEntry> collectRhEntries(String house, String device) {
+        List<RhEntry> entries = new ArrayList<>();
         Path logPath = getDeviceLogPath(house, device);
         try {
             String content = fileManager.readProtectedFile(logPath);
@@ -1153,14 +977,14 @@ public void RH_sendFile(String house, String device) {
                 String timestamp = csv[0].trim();
                 String command = csv[1].trim();
                 String[] parts = command.split("\\s+");
-                if (parts.length != 5 || !"EC2".equalsIgnoreCase(parts[0])) {
+                if (parts.length != 5 || !"EC".equalsIgnoreCase(parts[0])) {
                     continue;
                 }
                 if (!house.equals(parts[1]) || !device.equalsIgnoreCase(parts[2])) {
                     continue;
                 }
 
-                entries.add(new Rh2Entry(timestamp, parts[3], parts[4]));
+                entries.add(new RhEntry(timestamp, parts[3], parts[4]));
             }
         } catch (Exception e) {
             return entries;
@@ -1169,7 +993,7 @@ public void RH_sendFile(String house, String device) {
         return entries;
     }
 
-    public String RH2(String house, String user, String device) {
+    public String RH(String house, String user, String device) {
         String normalizedDevice = device == null ? null : device.toUpperCase(Locale.ROOT);
         if (!houses.containsKey(house)) {
             return "NOHM";
@@ -1182,7 +1006,7 @@ public void RH_sendFile(String house, String device) {
             return "NOD";
         }
 
-        List<Rh2Entry> entries = collectRh2Entries(house, normalizedDevice);
+        List<RhEntry> entries = collectRhEntries(house, normalizedDevice);
         if (entries.isEmpty()) {
             return "NODATA";
         }
@@ -1205,7 +1029,7 @@ public void RH_sendFile(String house, String device) {
         return "OK";
     }
 
-    public void RH2_sendFile(String house, String user, String device) {
+    public void RH_sendFile(String house, String user, String device) {
         String normalizedDevice = device == null ? null : device.toUpperCase(Locale.ROOT);
         String section = getStoredDeviceSection(house, normalizedDevice);
         if (section == null || section.isBlank()) {
@@ -1216,12 +1040,12 @@ public void RH_sendFile(String house, String device) {
         byte[] wrapped = fileManager.loadWrappedSectionKey(house, sectionName, owner, user);
         String wrappedB64 = wrapped == null ? "" : Base64.getEncoder().encodeToString(wrapped);
 
-        List<Rh2Entry> entries = collectRh2Entries(house, normalizedDevice);
+        List<RhEntry> entries = collectRhEntries(house, normalizedDevice);
 
         StringBuilder payload = new StringBuilder();
         payload.append("RH2 ").append(house).append(" ").append(normalizedDevice).append(System.lineSeparator());
         payload.append("KEY ").append(sectionName).append(" ").append(wrappedB64).append(System.lineSeparator());
-        for (Rh2Entry entry : entries) {
+        for (RhEntry entry : entries) {
             payload.append("H ")
                     .append(entry.timestamp)
                     .append(" ")
@@ -1302,40 +1126,22 @@ public void RH_sendFile(String house, String device) {
                 return registerDevice(user, parts[1], parts[2]);
 
             case "EC":
-                if (parts.length != 4) {
-                    return "ERRO: O correto é: EC <hm> <d> <int>";
+                if (parts.length == 3) {
+                    return ecRequestCommand(user, parts[1], parts[2]);
                 }
-                return sendInt(user, parts[1], parts[2], parts[3]);
-
-            case "EC2-REQ":
-                if (parts.length != 3) {
-                    return "ERRO: O correto e: EC2-REQ <hm> <d>";
+                if (parts.length == 5) {
+                    return ecSendCommand(user, parts[1], parts[2], parts[3], parts[4]);
                 }
-                return ec2RequestCommand(user, parts[1], parts[2]);
-
-            case "EC2-SEND":
-                if (parts.length != 5) {
-                    return "ERRO: O correto e: EC2-SEND <hm> <d> <ivB64> <ciphertextB64>";
+                if (parts.length == 4) {
+                    return "NOK-PLAINTEXT-DISABLED";
                 }
-                return ec2SendCommand(user, parts[1], parts[2], parts[3], parts[4]);
+                return "ERRO: O correto e: EC <hm> <d> [<ivB64> <ciphertextB64>]";
 
             case "RH":
                 if (parts.length != 3) {
                     return "ERRO: O correto é: RH <hm> <d>";
                 }
-                return historic(parts[1], user, parts[2]);
-
-            case "RT2":
-                if (parts.length != 2) {
-                    return "ERRO: O correto e: RT2 <hm>";
-                }
-                return RT2(parts[1], user);
-
-            case "RH2":
-                if (parts.length != 3) {
-                    return "ERRO: O correto e: RH2 <hm> <d>";
-                }
-                return RH2(parts[1], user, parts[2]);
+                return RH(parts[1], user, parts[2]);
 
             case "RT":
                 if (parts.length != 2) {

@@ -43,11 +43,8 @@ public class SpertaClient {
             " - ADD <user1> <hm> <s> # Adicionar utilizador <user1> a casa <hm>, secao <s>",
             " - RD <hm> <s> # Registar um dispositivo na casa <hm>, na secao <s>",
             " - EC <hm> <d> <int> # Enviar valor <int> de estado/temporizacao do dispositivo <d> da casa <hm> para o servidor",
-            " - EC2 <hm> <d> <int> # Enviar valor cifrado fim-a-fim para o dispositivo <d> da casa <hm>",
             " - RT <hm> # Receber a informacao do ultimo comando enviado a cada dispositivo da casa <hm> (com permissoes)",
-            " - RT2 <hm> # Receber informacao cifrada e decifrar localmente no cliente",
             " - RH <hm> <d> # Receber o historico (ficheiro .csv) de comandos enviados ao dispositivo <d> da casa <hm> (com permissoes)",
-            " - RH2 <hm> <d> # Receber historico cifrado e decifrar localmente no cliente",
             " - EXIT ou QUIT # Terminar a ligacao ao servidor e fechar o cliente",
             " - LS ou LS <hm> # Listar casas com acesso, ou listar dispositivos e temporizadores de uma casa <hm>");
     private static ClientNetwork network;
@@ -235,11 +232,11 @@ public class SpertaClient {
                 String[] parts = command.trim().split("\\s+");
                 String commandName = parts[0].toUpperCase();
 
-                if ("EC2".equals(commandName)) {
+                if ("EC".equals(commandName)) {
                     if (parts.length != 4) {
-                        System.out.println("ERRO: O correto e: EC2 <hm> <d> <int>");
+                        System.out.println("ERRO: O correto e: EC <hm> <d> <int>");
                     } else {
-                        handleEc2Command(userId, parts[1], parts[2], parts[3]);
+                        handleEcCommand(userId, parts[1], parts[2], parts[3]);
                     }
                     continue;
                 }
@@ -254,57 +251,34 @@ public class SpertaClient {
 
                 if ("OK".equals(response) && "RT".equals(commandName) && parts.length == 2) {
                     String house = parts[1];
-                    Path out = Paths.get("client_data", userId, "status_" + house + ".txt");
-                    long sizeBytes = network.receiveFile(out);
+                    Path encryptedOut = Paths.get("client_data", userId, "status_" + house + ".enc");
+                    Path plainOut = Paths.get("client_data", userId, "status_" + house + ".txt");
+                    long sizeBytes = network.receiveFile(encryptedOut);
                     if (sizeBytes >= 0) {
-                        System.out.println("OK");
-                        System.out.println("Tamanho recebido: " + sizeBytes + " bytes");
-                        System.out.println("Ficheiro RT recebido: " + out);
+                        if (processRtPayload(encryptedOut, plainOut, userId, house)) {
+                            System.out.println("OK");
+                            System.out.println("Ficheiro RT decifrado: " + plainOut);
+                        } else {
+                            System.out.println("Erro ao decifrar ficheiro RT.");
+                        }
                     } else {
                         System.out.println("Erro ao receber ficheiro RT.");
                     }
-                } else if ("OK".equals(response) && "RT2".equals(commandName) && parts.length == 2) {
-                    String house = parts[1];
-                    Path encryptedOut = Paths.get("client_data", userId, "status2_" + house + ".enc");
-                    Path plainOut = Paths.get("client_data", userId, "status2_" + house + ".txt");
-                    long sizeBytes = network.receiveFile(encryptedOut);
-                    if (sizeBytes >= 0) {
-                        if (processRt2Payload(encryptedOut, plainOut, userId, house)) {
-                            System.out.println("OK");
-                            System.out.println("Ficheiro RT2 decifrado: " + plainOut);
-                        } else {
-                            System.out.println("Erro ao decifrar ficheiro RT2.");
-                        }
-                    } else {
-                        System.out.println("Erro ao receber ficheiro RT2.");
-                    }
                 } else if ("OK".equals(response) && "RH".equals(commandName) && parts.length == 3) {
                     String house = parts[1];
-                    String device = parts[2];
-                    Path out = Paths.get("client_data", userId, "history_" + device + "_" + house + ".csv");
-                    long sizeBytes = network.receiveFile(out);
-                    if (sizeBytes >= 0) {
-                        System.out.println("OK");
-                        System.out.println("Tamanho recebido: " + sizeBytes + " bytes");
-                        System.out.println("Ficheiro RH recebido: " + out);
-                    } else {
-                        System.out.println("Erro ao receber ficheiro RH.");
-                    }
-                } else if ("OK".equals(response) && "RH2".equals(commandName) && parts.length == 3) {
-                    String house = parts[1];
                     String device = parts[2].toUpperCase();
-                    Path encryptedOut = Paths.get("client_data", userId, "history2_" + device + "_" + house + ".enc");
-                    Path plainOut = Paths.get("client_data", userId, "history2_" + device + "_" + house + ".csv");
+                    Path encryptedOut = Paths.get("client_data", userId, "history_" + device + "_" + house + ".enc");
+                    Path plainOut = Paths.get("client_data", userId, "history_" + device + "_" + house + ".csv");
                     long sizeBytes = network.receiveFile(encryptedOut);
                     if (sizeBytes >= 0) {
-                        if (processRh2Payload(encryptedOut, plainOut, userId, house, device)) {
+                        if (processRhPayload(encryptedOut, plainOut, userId, house, device)) {
                             System.out.println("OK");
-                            System.out.println("Ficheiro RH2 decifrado: " + plainOut);
+                            System.out.println("Ficheiro RH decifrado: " + plainOut);
                         } else {
-                            System.out.println("Erro ao decifrar ficheiro RH2.");
+                            System.out.println("Erro ao decifrar ficheiro RH.");
                         }
                     } else {
-                        System.out.println("Erro ao receber ficheiro RH2.");
+                        System.out.println("Erro ao receber ficheiro RH.");
                     }
                 } else {
                     System.out.println(response);
@@ -469,7 +443,7 @@ public class SpertaClient {
         }
     }
 
-    private String[] encryptEc2Value(int value, SecretKey sectionKey) throws Exception {
+    private String[] encryptEcValue(int value, SecretKey sectionKey) throws Exception {
         byte[] iv = new byte[12];
         new SecureRandom().nextBytes(iv);
 
@@ -483,7 +457,7 @@ public class SpertaClient {
         };
     }
 
-    private String decryptEc2Value(String ivB64, String ciphertextB64, SecretKey sectionKey) throws Exception {
+    private String decryptEcValue(String ivB64, String ciphertextB64, SecretKey sectionKey) throws Exception {
         byte[] iv = Base64.getDecoder().decode(ivB64);
         byte[] ciphertext = Base64.getDecoder().decode(ciphertextB64);
 
@@ -507,7 +481,7 @@ public class SpertaClient {
         return sectionKey;
     }
 
-    private boolean processRt2Payload(Path encryptedPath, Path plainOut, String userId, String house) {
+    private boolean processRtPayload(Path encryptedPath, Path plainOut, String userId, String house) {
         try {
             List<String> lines = Files.readAllLines(encryptedPath, StandardCharsets.UTF_8);
             Map<String, String> wrappedKeys = new LinkedHashMap<>();
@@ -520,7 +494,7 @@ public class SpertaClient {
 
             for (String rawLine : lines) {
                 String line = rawLine.trim();
-                if (line.isEmpty() || "RT2".equalsIgnoreCase(line)) {
+                if (line.isEmpty() || "RT".equalsIgnoreCase(line)) {
                     continue;
                 }
 
@@ -541,7 +515,7 @@ public class SpertaClient {
                         return false;
                     }
 
-                    String value = decryptEc2Value(ivB64, ciphertextB64, sectionKey);
+                    String value = decryptEcValue(ivB64, ciphertextB64, sectionKey);
                     outputLines.add("EC " + house + " " + device + " " + value);
                 }
             }
@@ -558,7 +532,7 @@ public class SpertaClient {
         }
     }
 
-    private boolean processRh2Payload(Path encryptedPath, Path plainOut, String userId, String house, String device) {
+    private boolean processRhPayload(Path encryptedPath, Path plainOut, String userId, String house, String device) {
         try {
             List<String> lines = Files.readAllLines(encryptedPath, StandardCharsets.UTF_8);
             String section = null;
@@ -568,7 +542,7 @@ public class SpertaClient {
 
             for (String rawLine : lines) {
                 String line = rawLine.trim();
-                if (line.isEmpty() || line.startsWith("RH2 ")) {
+                if (line.isEmpty() || line.startsWith("RH ")) {
                     continue;
                 }
                 String[] parts = line.split("\\s+");
@@ -587,7 +561,7 @@ public class SpertaClient {
                         return false;
                     }
                     SecretKey sectionKey = unwrapSectionKey(Base64.getDecoder().decode(wrappedB64), privateKey);
-                    String value = decryptEc2Value(parts[2], parts[3], sectionKey);
+                    String value = decryptEcValue(parts[2], parts[3], sectionKey);
                     outputLines.add(parts[1] + ";EC " + house + " " + device + " " + value);
                 }
             }
@@ -604,7 +578,7 @@ public class SpertaClient {
         }
     }
 
-    private void handleEc2Command(String userId, String house, String device, String valueStr) {
+    private void handleEcCommand(String userId, String house, String device, String valueStr) {
         int value;
         try {
             value = Integer.parseInt(valueStr);
@@ -619,7 +593,7 @@ public class SpertaClient {
         }
 
         String normalizedDevice = device.toUpperCase();
-        network.send("EC2-REQ " + house + " " + normalizedDevice);
+        network.send("EC " + house + " " + normalizedDevice);
         Object reqResponseObj = network.receive();
         if (!(reqResponseObj instanceof String reqResponse)) {
             System.out.println("Resposta inesperada do servidor: " + reqResponseObj);
@@ -647,9 +621,9 @@ public class SpertaClient {
             }
 
             SecretKey sectionKey = unwrapSectionKey(wrappedKey, requesterPrivateKey);
-            String[] encryptedPayload = encryptEc2Value(value, sectionKey);
+            String[] encryptedPayload = encryptEcValue(value, sectionKey);
 
-            network.send("EC2-SEND " + house + " " + normalizedDevice + " " + encryptedPayload[0] + " " + encryptedPayload[1]);
+            network.send("EC " + house + " " + normalizedDevice + " " + encryptedPayload[0] + " " + encryptedPayload[1]);
             Object sendResponseObj = network.receive();
             if (sendResponseObj instanceof String sendResponse) {
                 System.out.println(sendResponse);

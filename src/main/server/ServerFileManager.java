@@ -87,7 +87,6 @@ public class ServerFileManager {
     private static final String HOUSE_METADATA_FILENAME = "house_metadata.txt";
     private static final String SECTION_COUNTERS_FILENAME = "section_counters.txt";
     private static final String LAST_COMMANDS_FILENAME = "last_commands.txt";
-    private static final String LAST_COMMANDS_EC2_FILENAME = "last_commands_ec2.txt";
     private static final String ATTESTATION_FILENAME = "attestation.txt";
     private static final String DEFAULT_REFERENCE_CLIENT_JAR = "dist/SpertaClient.jar";
     private static final String CERTS = "certs";
@@ -101,7 +100,6 @@ public class ServerFileManager {
     private String attestationFile;
     private String certsDir;
     private String keysDir;
-    private String lastCommandsEc2File;
 
     private SecretKey masterKey;
     private static final byte[] MAGIC_HEADER = "SPRT".getBytes(StandardCharsets.UTF_8); // 4 bytes
@@ -252,7 +250,7 @@ public class ServerFileManager {
 
         return generated[0];
     }
-
+    // TODO check if necessary
     //Verify integrity **after** decryption. Crucial:** If verification fails at any point, print `NOK-INTEGRITY` and terminate immediately.
     public static void verifyIntegrity(String path) throws Exception{
         String newHash = ServerFileManager.generateHashFile(path);
@@ -286,7 +284,6 @@ public class ServerFileManager {
         this.attestationFile = projectRoot.resolve(SERVER_DATA_DIR).resolve(AUTH_DIR).resolve(ATTESTATION_FILENAME).toString();
         this.certsDir = projectRoot.resolve(SERVER_DATA_DIR).resolve(AUTH_DIR).resolve(CERTS).toString();
         this.keysDir = projectRoot.resolve(SERVER_DATA_DIR).resolve(KEYS).toString();
-        this.lastCommandsEc2File = projectRoot.resolve(SERVER_DATA_DIR).resolve(STATES_DIR).resolve(LAST_COMMANDS_EC2_FILENAME).toString();
     }
 
     //Finds the project root directory.
@@ -307,12 +304,6 @@ public class ServerFileManager {
         return projectRoot;
     }
 
-    /**
-     * Gets the project root directory.
-     */
-    public String getProjectRoot() {
-        return projectRoot.toString();
-    }
 
     public void ensurePersistenceStructure() {
         Path serverDataRoot = projectRoot.resolve(SERVER_DATA_DIR);
@@ -338,7 +329,6 @@ public class ServerFileManager {
             ensureFileExists(metadataDir.resolve(HOUSE_METADATA_FILENAME));
             ensureFileExists(metadataDir.resolve(SECTION_COUNTERS_FILENAME));
             ensureFileExists(statesDir.resolve(LAST_COMMANDS_FILENAME));
-            ensureFileExists(statesDir.resolve(LAST_COMMANDS_EC2_FILENAME));
         } catch (IOException e) {
             System.err.println("Erro ao preparar estrutura de persistência: " + e.getMessage());
             System.exit(-1);

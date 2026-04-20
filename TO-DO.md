@@ -37,17 +37,17 @@ To ensure you hit every requirement for the final submission on **April 24th**, 
 ---
 
 ## 4. End-to-End (E2E) Confidentiality
-* [ ] **Certificate Distribution Repository:**
-    * [ ] **First Login:** Server must request, receive, and store the user’s `.cert` file.
-    * [ ] **Subsequent Logins:** Server distributes certificates as needed for E2E sharing.
-* [ ] **Section Key Management:**
-    * [ ] **CREATE:** Owner generates an **AES 128-bit** "Section Key" for each section.
-    * [ ] **Key Storage:** Encrypt Section Keys with the Owner's public key and store them as `key.<hm>.<s>.<owner>` on the server.
-* [ ] **Secure Sharing (ADD Command):**
-    * [ ] Owner must fetch the key, re-encrypt it with the **new user's public key**, and upload the result.
-* [ ] **Encrypted Commands (EC, RT, RH):**
-    * [ ] **EC:** Client fetches the Section Key, decrypts it, and encrypts the device state value `<int>` before sending it to the server.
-    * [ ] **RT/RH:** Server checks permissions and sends encrypted data alongside the Section Key (encrypted for the requester).
+* [x] **Certificate Distribution Repository:**
+    * [x] **First Login:** Server must request, receive, and store the user’s `.cert` file.
+    * [x] **Subsequent Logins:** Server distributes certificates as needed for E2E sharing.
+* [x] **Section Key Management:**
+    * [x] **CREATE:** Owner generates an **AES 128-bit** "Section Key" for each section.
+    * [x] **Key Storage:** Encrypt Section Keys with the Owner's public key and store them as `key.<hm>.<s>.<owner>` on the server.
+* [x] **Secure Sharing (ADD Command):**
+    * [x] Owner must fetch the key, re-encrypt it with the **new user's public key**, and upload the result.
+* [x] **Encrypted Commands (EC, RT, RH):**
+    * [x] **EC:** Client fetches the Section Key, decrypts it, and encrypts the device state value `<int>` before sending it to the server.
+    * [x] **RT/RH:** Server checks permissions and sends encrypted data alongside the Section Key (encrypted for the requester).
 
 ---
 
