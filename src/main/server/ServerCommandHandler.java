@@ -408,6 +408,9 @@ public class ServerCommandHandler {
             return null;
         }
         String trimmed = raw.trim();
+        if (trimmed.startsWith("(") && trimmed.endsWith(")") && trimmed.length() >= 2) {
+            trimmed = trimmed.substring(1, trimmed.length() - 1).trim();
+        }
         if (trimmed.isEmpty()) {
             return null;
         }
@@ -539,6 +542,24 @@ public class ServerCommandHandler {
         return false;
     }
 
+    private boolean requestedSectionsExistInHouse(String house, String requestedSections) {
+        String normalizedRequested = normalizePermissionValue(requestedSections);
+        if (normalizedRequested == null) {
+            return false;
+        }
+        if (normalizedRequested.equalsIgnoreCase("all")) {
+            return true;
+        }
+
+        Set<String> existingSections = getExistingSections(house);
+        for (String section : normalizedRequested.split(",")) {
+            if (!existingSections.contains(section)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
 
     //Método CREATE
     private String createHouse(String user, String house) {
@@ -580,7 +601,7 @@ public class ServerCommandHandler {
         if (!houses.get(house).equals(user)) {
             return "NOPERM";
         }
-        if (!sectionExistsInHouse(house, section)) {
+        if (!requestedSectionsExistInHouse(house, section)) {
             return "NOK";
         }
 
@@ -942,10 +963,11 @@ public void RH_sendFile(String house, String device) {
                 return createHouse(user, parts[1]);
 
             case "ADD":
-                if (parts.length != 4) {
-                    return "ERRO: O correto é:  ADD <user1> <hm> <s>";
+                if (parts.length < 4) {
+                    return "ERRO: O correto é:  ADD <user1> <hm> <s1,s2,...>";
                 }
-                return addHouse(user, parts[1], parts[2], parts[3]);
+                String sectionsArg = String.join("", Arrays.copyOfRange(parts, 3, parts.length));
+                return addHouse(user, parts[1], parts[2], sectionsArg);
 
             case "RD":
                 if (parts.length != 3) {
@@ -995,7 +1017,7 @@ public void RH_sendFile(String house, String device) {
                     result.append(deviceName).append(" ").append(devices.get(deviceName)).append("\n");
                 }
             }
-            return result.toString();
+            return result.toString().trim();
         } else {
             StringBuilder result = new StringBuilder();
             for (String houseName : houses.keySet()) {
@@ -1006,7 +1028,7 @@ public void RH_sendFile(String house, String device) {
             if (result.isEmpty()) {
                 return "NODATA";
             }
-            return result.toString();
+            return result.toString().trim();
         }
     }
 

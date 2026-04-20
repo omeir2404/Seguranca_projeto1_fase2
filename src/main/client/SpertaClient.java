@@ -155,8 +155,29 @@ public class SpertaClient {
         if ("OK-NEW-USER".equals(authResponse)) {
             return sendClientCertificate(userId);
         }
-
-        return "OK-USER".equals(authResponse);
+        // if user exists verify certificate
+        if ("OK-USER".equals(authResponse) && !cachedCertificates.containsKey(userId)) {
+            // ask for certificate from server
+            network.send("GETCERT " + userId);
+            Object responseObj = network.receive();
+            if (!(responseObj instanceof String response) || !response.startsWith("OK ")) {
+                System.out.println("Resposta inesperada do servidor durante verificação do certificado: " + responseObj);
+                return false;
+            }
+            String certB64 = response.substring(3).trim();
+            try {
+                byte[] certBytes = Base64.getDecoder().decode(certB64);
+                CertificateFactory cf = CertificateFactory.getInstance("X.509");
+                Certificate cert = cf.generateCertificate(new ByteArrayInputStream(certBytes));
+                cachedCertificates.put(userId, cert);
+                System.out.println("Certificado do utilizador verificado e armazenado em cache.");
+                return true;
+            } catch (Exception e) {
+                System.err.println("Erro ao processar o certificado do utilizador: " + e.getMessage());
+                return false;
+            }
+        }
+        return false;
     }
 
     private boolean authenticate(Scanner sc, String userId, String password){
@@ -200,7 +221,9 @@ public class SpertaClient {
             System.out.flush();
             String command = sc.nextLine();
 
-            if (command.equalsIgnoreCase("exit") || command.equalsIgnoreCase("quit")) {
+            if (command.equalsIgnoreCase("help")){
+                System.out.println(HELP_TEXT);
+            } else if (command.equalsIgnoreCase("exit") || command.equalsIgnoreCase("quit")) {
                 running = false;
                 System.out.println("A desconectar...");
             } else if (!command.trim().isEmpty()) {
