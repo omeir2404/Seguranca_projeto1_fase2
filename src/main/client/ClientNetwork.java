@@ -36,6 +36,18 @@ public class ClientNetwork {
         }
     }
 
+    public void sendFile(ByteArrayOutputStream baos) {
+
+        try {
+            out.writeLong(baos.size());
+            out.flush();
+            out.write(baos.toByteArray());
+            out.flush();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
     // receive
     public Object receive() {
         try {
