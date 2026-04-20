@@ -12,9 +12,11 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.SimpleFileVisitor;
+import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
@@ -73,6 +75,8 @@ public class ServerFileManager {
     private static final String LAST_COMMANDS_FILENAME = "last_commands.txt";
     private static final String ATTESTATION_FILENAME = "attestation.txt";
     private static final String DEFAULT_REFERENCE_CLIENT_JAR = "dist/SpertaClient.jar";
+    private static final String CERTS = "certs";
+    private static final String KEYS = "keys";
 
     private Path projectRoot;
     private String usersFile;
@@ -80,6 +84,8 @@ public class ServerFileManager {
     private String permissionsFile;
     private String logsDir;
     private String attestationFile;
+    private String certsDir;
+    private String keysDir;
 
     private SecretKey masterKey;
     private static final byte[] MAGIC_HEADER = "SPRT".getBytes(StandardCharsets.UTF_8); // 4 bytes
@@ -262,6 +268,8 @@ public class ServerFileManager {
         this.permissionsFile = projectRoot.resolve(SERVER_DATA_DIR).resolve(METADATA_DIR).resolve(PERMISSIONS_FILENAME).toString();
         this.logsDir = projectRoot.resolve(SERVER_DATA_DIR).resolve(HOMES_DIR).toString();
         this.attestationFile = projectRoot.resolve(SERVER_DATA_DIR).resolve(AUTH_DIR).resolve(ATTESTATION_FILENAME).toString();
+        this.certsDir = projectRoot.resolve(SERVER_DATA_DIR).resolve(AUTH_DIR).resolve(CERTS).toString();
+        this.keysDir = projectRoot.resolve(SERVER_DATA_DIR).resolve(KEYS).toString();
     }
 
     //Finds the project root directory.
@@ -295,9 +303,13 @@ public class ServerFileManager {
         Path metadataDir = serverDataRoot.resolve(METADATA_DIR);
         Path statesDir = serverDataRoot.resolve(STATES_DIR);
         Path homesDir = serverDataRoot.resolve(HOMES_DIR);
+        Path certsDirPath = authDir.resolve(CERTS);
+        Path keysDirPath = serverDataRoot.resolve(KEYS);
 
         try {
             Files.createDirectories(authDir);
+            Files.createDirectories(certsDirPath);
+            Files.createDirectories(keysDirPath);
             Files.createDirectories(metadataDir);
             Files.createDirectories(statesDir);
             Files.createDirectories(homesDir);
@@ -642,6 +654,138 @@ public Map<String, String> loadHouses() {
             
         } catch (Exception e) {
             System.err.println("Erro ao escrever em " + usersFile + ": " + e.getMessage());
+        }
+    }
+
+    private boolean isValidUserIdForPath(String user) {
+        if (user == null || user.isBlank()) {
+            return false;
+        }
+        return user.matches("[A-Za-z0-9._-]+");
+    }
+
+    public Path getUserCertificatePath(String user) {
+        if (!isValidUserIdForPath(user)) {
+            throw new IllegalArgumentException("User id inválido para caminho de certificado.");
+        }
+        try {
+            Path base = Paths.get(certsDir).toAbsolutePath().normalize();
+            Path target = base.resolve(user + ".cer").normalize();
+            if (!target.startsWith(base)) {
+                throw new IllegalArgumentException("User id inválido para caminho de certificado.");
+            }
+            return target;
+        } catch (InvalidPathException e) {
+            throw new IllegalArgumentException("User id inválido para caminho de certificado.", e);
+        }
+    }
+
+    public boolean hasUserCertificate(String user) {
+        try {
+            return Files.isRegularFile(getUserCertificatePath(user));
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
+    }
+
+    public synchronized boolean saveUserCertificate(String user, byte[] certBytes) {
+        if (certBytes == null || certBytes.length == 0) {
+            return false;
+        }
+        try {
+            Path certPath = getUserCertificatePath(user);
+            Path parent = certPath.getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
+
+            Files.write(certPath, certBytes, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+            String hash = generateHashFile(certPath);
+            Files.writeString(certPath.resolveSibling(certPath.getFileName().toString() + HASH_EXTENSION),
+                    hash + System.lineSeparator(),
+                    StandardOpenOption.CREATE,
+                    StandardOpenOption.TRUNCATE_EXISTING,
+                    StandardOpenOption.WRITE);
+            return true;
+        } catch (Exception e) {
+            System.err.println("Erro ao guardar certificado de utilizador: " + e.getMessage());
+            return false;
+        }
+    }
+
+    public synchronized byte[] readUserCertificateBytes(String user) {
+        try {
+            Path certPath = getUserCertificatePath(user);
+            if (!Files.isRegularFile(certPath)) {
+                return null;
+            }
+            return Files.readAllBytes(certPath);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private String sanitizeToken(String token) {
+        if (token == null || token.isBlank()) {
+            throw new IllegalArgumentException("Token inválido para caminho de chave.");
+        }
+        if (!token.matches("[A-Za-z0-9._-]+")) {
+            throw new IllegalArgumentException("Token inválido para caminho de chave.");
+        }
+        return token;
+    }
+
+    private Path getWrappedSectionKeyPath(String house, String section, String owner, String recipient) {
+        String safeHouse = sanitizeToken(house);
+        String safeSection = sanitizeToken(section);
+        String safeOwner = sanitizeToken(owner);
+        String safeRecipient = sanitizeToken(recipient);
+
+        Path base = Paths.get(keysDir).toAbsolutePath().normalize();
+        Path target = base
+                .resolve(safeHouse)
+                .resolve(safeSection)
+                .resolve("key." + safeHouse + "." + safeSection + "." + safeOwner + "." + safeRecipient + ".bin")
+                .normalize();
+        if (!target.startsWith(base)) {
+            throw new IllegalArgumentException("Caminho inválido para chave de secção.");
+        }
+        return target;
+    }
+
+    public synchronized boolean saveWrappedSectionKey(String house, String section, String owner, String recipient, byte[] wrappedKey) {
+        if (wrappedKey == null || wrappedKey.length == 0) {
+            return false;
+        }
+        try {
+            Path keyPath = getWrappedSectionKeyPath(house, section, owner, recipient);
+            Path parent = keyPath.getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
+            Files.write(keyPath, wrappedKey, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+            String hash = generateHashFile(keyPath);
+            Files.writeString(keyPath.resolveSibling(keyPath.getFileName().toString() + HASH_EXTENSION),
+                    hash + System.lineSeparator(),
+                    StandardOpenOption.CREATE,
+                    StandardOpenOption.TRUNCATE_EXISTING,
+                    StandardOpenOption.WRITE);
+            return true;
+        } catch (Exception e) {
+            System.err.println("Erro ao guardar chave de secção cifrada: " + e.getMessage());
+            return false;
+        }
+    }
+
+    public synchronized byte[] loadWrappedSectionKey(String house, String section, String owner, String recipient) {
+        try {
+            Path keyPath = getWrappedSectionKeyPath(house, section, owner, recipient);
+            if (!Files.isRegularFile(keyPath)) {
+                return null;
+            }
+            return Files.readAllBytes(keyPath);
+        } catch (Exception e) {
+            return null;
         }
     }
 
