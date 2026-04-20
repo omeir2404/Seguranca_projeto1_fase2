@@ -806,7 +806,7 @@ public Map<String, String> loadHouses() {
         }
 
         try {
-            Path target = Paths.get(lastCommandsEc2File).toAbsolutePath().normalize();
+            Path target = Paths.get(LAST_COMMANDS_FILENAME).toAbsolutePath().normalize();
             String content = readProtectedFile(target);
             List<String> lines = content.isBlank()
                     ? new ArrayList<>()
@@ -849,7 +849,7 @@ public Map<String, String> loadHouses() {
         }
 
         try {
-            Path target = Paths.get(lastCommandsEc2File).toAbsolutePath().normalize();
+            Path target = Paths.get(LAST_COMMANDS_FILENAME).toAbsolutePath().normalize();
             String content = readProtectedFile(target);
             if (content.isBlank()) {
                 return result;
@@ -884,13 +884,6 @@ public Map<String, String> loadHouses() {
         return result;
     }
 
-    public synchronized EncryptedLastCommand loadEncryptedLastCommand(String house, String device) {
-        if (device == null || device.isBlank()) {
-            return null;
-        }
-        Map<String, EncryptedLastCommand> byHouse = loadEncryptedLastCommandsByHouse(house);
-        return byHouse.get(device);
-    }
 
     // ============ UTILITY METHODS ============
 
