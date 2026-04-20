@@ -208,7 +208,7 @@ public class SpertaServer extends Thread {
 
 		try {
 			SSLServerSocketFactory ssf = (SSLServerSocketFactory) SSLServerSocketFactory.getDefault();
-			serverSocket = (SSLServerSocket) ssf.createServerSocket(port);
+			serverSocket = ssf.createServerSocket(port);
 			System.out.println("Servidor Seguro (TLS) à espera de clientes...");
 			
 			while(running) {
@@ -242,7 +242,8 @@ public class SpertaServer extends Thread {
     	private Socket socket;
 		private ServerCommandHandler commandHandler;
 		private ServerNetwork network;
-		
+		private boolean requiresCertificateUpload;
+
 		ClientHandler(Socket sock) {
 			this.socket = sock;
 			try{
@@ -317,6 +318,7 @@ public class SpertaServer extends Thread {
 		// ============ COMMAND EXECUTION METHODS ============
 
 		private String authenticateClient() throws IOException {
+			requiresCertificateUpload = false;
 			String user = (String) network.receive();
 			String passwd = (String) network.receive();
 			System.out.println("Tentativa de autenticacao do utilizador: " + user);
@@ -329,6 +331,8 @@ public class SpertaServer extends Thread {
 				}
 				if (authenticated == 1) {
 					network.send("OK-NEW-USER");
+					requiresCertificateUpload = true;
+
 				} else {
 					network.send("OK-USER");
 				}
@@ -352,6 +356,32 @@ public class SpertaServer extends Thread {
 			return null;
 		}
 
+		private boolean handleCertificateUploadIfNeeded(String user) {
+			if (!requiresCertificateUpload) {
+				return true;
+			}
+
+			network.send("REQ-CERT");
+			Object certObject = network.receive();
+			if (!(certObject instanceof byte[] certBytes)) {
+				network.send("NOK-CERT-EXPECTED");
+				return false;
+			}
+
+			if (certBytes.length == 0) {
+				network.send("NOK-CERT-EMPTY");
+				return false;
+			}
+
+			if (!fileManager.saveUserCertificate(user, certBytes)) {
+				network.send("NOK-CERT-IO");
+				return false;
+			}
+
+			network.send("OK-CERT-STORED");
+			return true;
+		}
+
 		@Override
 		public void run() {
 			String user = null;
@@ -362,6 +392,10 @@ public class SpertaServer extends Thread {
 
 				user = authenticateClient();
 				if (user == null || user.isEmpty()) {
+					return;
+				}
+
+				if (!handleCertificateUploadIfNeeded(user)) {
 					return;
 				}
 

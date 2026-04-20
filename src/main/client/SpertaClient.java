@@ -7,15 +7,32 @@
 
 package main.client;
 
+import java.io.ByteArrayInputStream;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.security.Key;
+import java.security.KeyFactory;
 import java.security.MessageDigest;
+import java.security.PrivateKey;
+import java.security.PublicKey;
 import java.security.KeyStore;
+import java.security.cert.Certificate;
+import java.security.cert.CertificateFactory;
+import java.security.spec.X509EncodedKeySpec;
+import java.util.Base64;
+import java.util.Enumeration;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Scanner;
+
+import javax.crypto.Cipher;
+import javax.crypto.KeyGenerator;
+import javax.crypto.SecretKey;
+import javax.crypto.spec.SecretKeySpec;
 
 public class SpertaClient {
     private static final String HELP_TEXT = String.join("\n",
@@ -30,6 +47,9 @@ public class SpertaClient {
             " - LS ou LS <hm> # Listar casas com acesso, ou listar dispositivos e temporizadores de uma casa <hm>");
     private static ClientNetwork network;
     private static KeyStore userKeyStore;
+    private static char[] keyPasswordChars;
+    private static final String[] HOUSE_SECTIONS = {"M", "G", "L", "P", "B", "E"};
+    private final Map<String, Certificate> cachedCertificates = new LinkedHashMap<>();
 
 
     public static class ServerAddress {
@@ -117,6 +137,7 @@ public class SpertaClient {
         }
 
         userKeyStore = loadUserKeyStore(keystorePath, keystorePassword);
+        keyPasswordChars = keystorePassword.toCharArray();
         SpertaClient client = new SpertaClient();
         network = new ClientNetwork();
         if (!network.initClientNetwork(server.host, server.port, truststorePath, truststorePassword)) {
@@ -126,10 +147,16 @@ public class SpertaClient {
     }
 
 
-    private boolean isAuthenticatedResponse(String authResponse) {
-        if(authResponse == null)
+    private boolean isAuthenticatedResponse(String authResponse, String userId) {
+        if (authResponse == null) {
             return false;
-        return "OK-USER".equals(authResponse) || "OK-NEW-USER".equals(authResponse);
+        }
+
+        if ("OK-NEW-USER".equals(authResponse)) {
+            return sendClientCertificate(userId);
+        }
+
+        return "OK-USER".equals(authResponse);
     }
 
     private boolean authenticate(Scanner sc, String userId, String password){
@@ -148,7 +175,7 @@ public class SpertaClient {
             System.out.println("Servidor: " + authResponse);
         }
 
-        if (isAuthenticatedResponse(authResponse)) {
+        if (isAuthenticatedResponse(authResponse, userId)) {
             System.out.println("Conectado a main.server!");
             System.out.println(HELP_TEXT);
             return true;
@@ -213,7 +240,163 @@ public class SpertaClient {
                 } else {
                     System.out.println(response);
                 }
+
+                if ("OK".equals(response) && "CREATE".equals(commandName) && parts.length == 2) {
+                    if (!bootstrapOwnerSectionKeys(parts[1], userId)) {
+                        System.out.println("Aviso: falha ao publicar uma ou mais chaves de secao apos CREATE.");
+                    }
+                }
+
+                if ("OK".equals(response) && "ADD".equals(commandName) && parts.length == 4) {
+                    String targetUser = parts[1];
+                    String house = parts[2];
+                    String section = normalizeSectionName(parts[3]);
+                    if (section != null && !shareSectionKeyWithUser(house, section, userId, targetUser)) {
+                        System.out.println("Aviso: falha ao partilhar chave de secao para o utilizador adicionado.");
+                    }
+                }
             }
+        }
+    }
+
+    private String normalizeSectionName(String section) {
+        if (section == null) {
+            return null;
+        }
+        String trimmed = section.trim().toUpperCase();
+        if (trimmed.length() != 1) {
+            return null;
+        }
+        for (String allowed : HOUSE_SECTIONS) {
+            if (allowed.equals(trimmed)) {
+                return trimmed;
+            }
+        }
+        return null;
+    }
+
+    private PrivateKey loadUserPrivateKey(String userId) throws Exception {
+        String alias = resolveCertificateAlias(userId);
+        if (alias == null) {
+            return null;
+        }
+        Key key = userKeyStore.getKey(alias, keyPasswordChars);
+        if (key instanceof PrivateKey privateKey) {
+            return privateKey;
+        }
+        return null;
+    }
+
+    private SecretKey generateSectionKey() throws Exception {
+        KeyGenerator keyGenerator = KeyGenerator.getInstance("AES");
+        keyGenerator.init(128);
+        return keyGenerator.generateKey();
+    }
+
+    private byte[] wrapSectionKeyForCertificate(SecretKey sectionKey, Certificate cert) throws Exception {
+        Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
+        cipher.init(Cipher.ENCRYPT_MODE, cert.getPublicKey());
+        return cipher.doFinal(sectionKey.getEncoded());
+    }
+
+    private SecretKey unwrapSectionKey(byte[] wrappedKey, PrivateKey privateKey) throws Exception {
+        Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
+        cipher.init(Cipher.DECRYPT_MODE, privateKey);
+        byte[] rawKey = cipher.doFinal(wrappedKey);
+        return new SecretKeySpec(rawKey, "AES");
+    }
+
+    private boolean putWrappedSectionKey(String house, String section, String recipient, byte[] wrappedKeyBytes) {
+        String payloadB64 = Base64.getEncoder().encodeToString(wrappedKeyBytes);
+        network.send("PUTWKEY " + house + " " + section + " " + recipient + " " + payloadB64);
+        Object responseObj = network.receive();
+        return responseObj instanceof String response && "OK".equals(response);
+    }
+
+    private byte[] getWrappedSectionKey(String house, String section, String owner) {
+        network.send("GETWKEY " + house + " " + section + " " + owner);
+        Object responseObj = network.receive();
+        if (!(responseObj instanceof String response)) {
+            return null;
+        }
+        if (!response.startsWith("OK ")) {
+            return null;
+        }
+        String b64 = response.substring(3).trim();
+        try {
+            return Base64.getDecoder().decode(b64);
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    private Certificate fetchCertificateFromServer(String user) {
+        if (cachedCertificates.containsKey(user)) {
+            return cachedCertificates.get(user);
+        }
+        network.send("GETCERT " + user);
+        Object responseObj = network.receive();
+        if (!(responseObj instanceof String response) || !response.startsWith("OK ")) {
+            return null;
+        }
+        String certB64 = response.substring(3).trim();
+        try {
+            byte[] certBytes = Base64.getDecoder().decode(certB64);
+            CertificateFactory cf = CertificateFactory.getInstance("X.509");
+            Certificate cert = cf.generateCertificate(new ByteArrayInputStream(certBytes));
+            cachedCertificates.put(user, cert);
+            return cert;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private boolean bootstrapOwnerSectionKeys(String house, String userId) {
+        try {
+            String alias = resolveCertificateAlias(userId);
+            if (alias == null) {
+                return false;
+            }
+            Certificate ownerCert = userKeyStore.getCertificate(alias);
+            if (ownerCert == null) {
+                return false;
+            }
+
+            for (String section : HOUSE_SECTIONS) {
+                SecretKey sectionKey = generateSectionKey();
+                byte[] wrapped = wrapSectionKeyForCertificate(sectionKey, ownerCert);
+                if (!putWrappedSectionKey(house, section, userId, wrapped)) {
+                    return false;
+                }
+            }
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private boolean shareSectionKeyWithUser(String house, String section, String ownerUser, String targetUser) {
+        try {
+            byte[] ownerWrappedKey = getWrappedSectionKey(house, section, ownerUser);
+            if (ownerWrappedKey == null) {
+                return false;
+            }
+
+            PrivateKey ownerPrivateKey = loadUserPrivateKey(ownerUser);
+            if (ownerPrivateKey == null) {
+                return false;
+            }
+
+            SecretKey sectionKey = unwrapSectionKey(ownerWrappedKey, ownerPrivateKey);
+            Certificate targetCert = fetchCertificateFromServer(targetUser);
+            if (targetCert == null) {
+                return false;
+            }
+
+            byte[] rewrappedForTarget = wrapSectionKeyForCertificate(sectionKey, targetCert);
+            return putWrappedSectionKey(house, section, targetUser, rewrappedForTarget);
+        } catch (Exception e) {
+            return false;
         }
     }
 
@@ -292,4 +475,58 @@ public class SpertaClient {
             e.printStackTrace();
         }
     }
+
+    private String resolveCertificateAlias(String userId) throws Exception {
+        if (userId != null && !userId.isBlank() && userKeyStore.containsAlias(userId)
+                && userKeyStore.getCertificate(userId) != null) {
+            return userId;
+        }
+
+        Enumeration<String> aliases = userKeyStore.aliases();
+        while (aliases.hasMoreElements()) {
+            String alias = aliases.nextElement();
+            if (userKeyStore.getCertificate(alias) != null) {
+                return alias;
+            }
+        }
+        return null;
+    }
+
+    private boolean sendClientCertificate(String userId) {
+        try {
+            Object reqObj = network.receive();
+            if (!(reqObj instanceof String req) || !"REQ-CERT".equals(req)) {
+                System.out.println("Resposta inesperada do servidor durante upload do certificado: " + reqObj);
+                return false;
+            }
+
+            String alias = resolveCertificateAlias(userId);
+            if (alias == null) {
+                network.send(new byte[0]);
+                System.out.println("Não foi encontrado nenhum certificado na keystore do cliente.");
+                return false;
+            }
+
+            Certificate cert = userKeyStore.getCertificate(alias);
+            if (cert == null) {
+                network.send(new byte[0]);
+                return false;
+            }
+
+            byte[] certBytes = cert.getEncoded();
+            network.send(certBytes);
+
+            Object responseObj = network.receive();
+            if (responseObj instanceof String response && "OK-CERT-STORED".equals(response)) {
+                System.out.println("Certificado do cliente enviado com sucesso.");
+                return true;
+            }
+            System.out.println("Falha no upload do certificado: " + responseObj);
+            return false;
+        } catch (Exception e) {
+            System.err.println("Erro ao enviar o certificado do cliente: " + e.getMessage());
+        }
+        return false;
+    }
+
 }
