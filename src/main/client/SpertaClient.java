@@ -11,18 +11,17 @@ import java.io.ByteArrayInputStream;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.security.Key;
-import java.security.KeyFactory;
 import java.security.MessageDigest;
 import java.security.PrivateKey;
-import java.security.PublicKey;
 import java.security.KeyStore;
+import java.security.SecureRandom;
 import java.security.cert.Certificate;
 import java.security.cert.CertificateFactory;
-import java.security.spec.X509EncodedKeySpec;
 import java.util.Base64;
 import java.util.Enumeration;
 import java.util.LinkedHashMap;
@@ -32,6 +31,7 @@ import java.util.Scanner;
 import javax.crypto.Cipher;
 import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
+import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
 public class SpertaClient {
@@ -41,6 +41,7 @@ public class SpertaClient {
             " - ADD <user1> <hm> <s> # Adicionar utilizador <user1> a casa <hm>, secao <s>",
             " - RD <hm> <s> # Registar um dispositivo na casa <hm>, na secao <s>",
             " - EC <hm> <d> <int> # Enviar valor <int> de estado/temporizacao do dispositivo <d> da casa <hm> para o servidor",
+            " - EC2 <hm> <d> <int> # Enviar valor cifrado fim-a-fim para o dispositivo <d> da casa <hm>",
             " - RT <hm> # Receber a informacao do ultimo comando enviado a cada dispositivo da casa <hm> (com permissoes)",
             " - RH <hm> <d> # Receber o historico (ficheiro .csv) de comandos enviados ao dispositivo <d> da casa <hm> (com permissoes)",
             " - EXIT ou QUIT # Terminar a ligacao ao servidor e fechar o cliente",
@@ -177,7 +178,7 @@ public class SpertaClient {
                 return false;
             }
         }
-        return false;
+        return "OK-USER".equals(authResponse);
     }
 
     private boolean authenticate(Scanner sc, String userId, String password){
@@ -227,9 +228,19 @@ public class SpertaClient {
                 running = false;
                 System.out.println("A desconectar...");
             } else if (!command.trim().isEmpty()) {
-                network.send(command);
                 String[] parts = command.trim().split("\\s+");
                 String commandName = parts[0].toUpperCase();
+
+                if ("EC2".equals(commandName)) {
+                    if (parts.length != 4) {
+                        System.out.println("ERRO: O correto e: EC2 <hm> <d> <int>");
+                    } else {
+                        handleEc2Command(userId, parts[1], parts[2], parts[3]);
+                    }
+                    continue;
+                }
+
+                network.send(command);
 
                 Object responseObj = network.receive();
                 if (!(responseObj instanceof String response)) {
@@ -420,6 +431,77 @@ public class SpertaClient {
             return putWrappedSectionKey(house, section, targetUser, rewrappedForTarget);
         } catch (Exception e) {
             return false;
+        }
+    }
+
+    private String[] encryptEc2Value(int value, SecretKey sectionKey) throws Exception {
+        byte[] iv = new byte[12];
+        new SecureRandom().nextBytes(iv);
+
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        cipher.init(Cipher.ENCRYPT_MODE, sectionKey, new GCMParameterSpec(128, iv));
+        byte[] ciphertext = cipher.doFinal(Integer.toString(value).getBytes(StandardCharsets.UTF_8));
+
+        return new String[]{
+                Base64.getEncoder().encodeToString(iv),
+                Base64.getEncoder().encodeToString(ciphertext)
+        };
+    }
+
+    private void handleEc2Command(String userId, String house, String device, String valueStr) {
+        int value;
+        try {
+            value = Integer.parseInt(valueStr);
+        } catch (NumberFormatException e) {
+            System.out.println("NOK");
+            return;
+        }
+
+        if (value < 0 || value > 600) {
+            System.out.println("NOK");
+            return;
+        }
+
+        String normalizedDevice = device.toUpperCase();
+        network.send("EC2-REQ " + house + " " + normalizedDevice);
+        Object reqResponseObj = network.receive();
+        if (!(reqResponseObj instanceof String reqResponse)) {
+            System.out.println("Resposta inesperada do servidor: " + reqResponseObj);
+            return;
+        }
+        if (!reqResponse.startsWith("OK ")) {
+            System.out.println(reqResponse);
+            return;
+        }
+
+        String[] responseParts = reqResponse.split("\\s+", 4);
+        if (responseParts.length != 4) {
+            System.out.println("NOK");
+            return;
+        }
+
+        String wrappedKeyB64 = responseParts[3];
+
+        try {
+            byte[] wrappedKey = Base64.getDecoder().decode(wrappedKeyB64);
+            PrivateKey requesterPrivateKey = loadUserPrivateKey(userId);
+            if (requesterPrivateKey == null) {
+                System.out.println("NOK");
+                return;
+            }
+
+            SecretKey sectionKey = unwrapSectionKey(wrappedKey, requesterPrivateKey);
+            String[] encryptedPayload = encryptEc2Value(value, sectionKey);
+
+            network.send("EC2-SEND " + house + " " + normalizedDevice + " " + encryptedPayload[0] + " " + encryptedPayload[1]);
+            Object sendResponseObj = network.receive();
+            if (sendResponseObj instanceof String sendResponse) {
+                System.out.println(sendResponse);
+            } else {
+                System.out.println("Resposta inesperada do servidor: " + sendResponseObj);
+            }
+        } catch (Exception e) {
+            System.out.println("NOK");
         }
     }
 

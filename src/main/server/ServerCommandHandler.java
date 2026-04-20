@@ -915,6 +915,85 @@ public void RH_sendFile(String house, String device) {
         return "OK " + Base64.getEncoder().encodeToString(wrappedBytes);
     }
 
+    private String ec2RequestCommand(String requester, String house, String device) {
+        String normalizedDevice = device == null ? null : device.toUpperCase(Locale.ROOT);
+        if (!houses.containsKey(house)) {
+            return "NOHM";
+        }
+
+        Map<String, Integer> devices = deviceState.get(house);
+        if (devices == null || !devices.containsKey(normalizedDevice)) {
+            return "NOD";
+        }
+
+        String section = getStoredDeviceSection(house, normalizedDevice);
+        if (section == null || section.isBlank()) {
+            section = deviceSection(normalizedDevice);
+        }
+        String sectionName = normalizeSectionName(section);
+        if (sectionName == null || sectionName.equalsIgnoreCase("all")) {
+            return "NOK";
+        }
+
+        if (!checkPermissions(house, requester, sectionName)) {
+            return "NOPERM";
+        }
+
+        String owner = houses.get(house);
+        if (owner == null || owner.isBlank()) {
+            return "NOK";
+        }
+
+        byte[] wrappedKey = fileManager.loadWrappedSectionKey(house, sectionName, owner, requester);
+        if (wrappedKey == null || wrappedKey.length == 0) {
+            return "NOKEY";
+        }
+
+        return "OK " + sectionName + " " + owner + " " + Base64.getEncoder().encodeToString(wrappedKey);
+    }
+
+    private String ec2SendCommand(String requester, String house, String device, String ivB64, String ciphertextB64) {
+        String normalizedDevice = device == null ? null : device.toUpperCase(Locale.ROOT);
+        if (!houses.containsKey(house)) {
+            return "NOHM";
+        }
+
+        Map<String, Integer> devices = deviceState.get(house);
+        if (devices == null || !devices.containsKey(normalizedDevice)) {
+            return "NOD";
+        }
+
+        String section = getStoredDeviceSection(house, normalizedDevice);
+        if (section == null || section.isBlank()) {
+            section = deviceSection(normalizedDevice);
+        }
+        String sectionName = normalizeSectionName(section);
+        if (sectionName == null || sectionName.equalsIgnoreCase("all")) {
+            return "NOK";
+        }
+
+        if (!checkPermissions(house, requester, sectionName)) {
+            return "NOPERM";
+        }
+
+        try {
+            byte[] iv = Base64.getDecoder().decode(ivB64);
+            byte[] ciphertext = Base64.getDecoder().decode(ciphertextB64);
+            if (iv.length == 0 || ciphertext.length == 0) {
+                return "NOK";
+            }
+        } catch (IllegalArgumentException e) {
+            return "NOK";
+        }
+
+        if (!fileManager.saveEncryptedLastCommand(house, normalizedDevice, ivB64, ciphertextB64)) {
+            return "NOK";
+        }
+
+        updateDeviceLogs("EC2 " + house + " " + normalizedDevice + " " + ivB64 + " " + ciphertextB64, house, normalizedDevice);
+        return "OK";
+    }
+
 //////////////////////////FUNÇÕES AUXILIARES/////////////////////////////////////////
 
 
@@ -980,6 +1059,18 @@ public void RH_sendFile(String house, String device) {
                     return "ERRO: O correto é: EC <hm> <d> <int>";
                 }
                 return sendInt(user, parts[1], parts[2], parts[3]);
+
+            case "EC2-REQ":
+                if (parts.length != 3) {
+                    return "ERRO: O correto e: EC2-REQ <hm> <d>";
+                }
+                return ec2RequestCommand(user, parts[1], parts[2]);
+
+            case "EC2-SEND":
+                if (parts.length != 5) {
+                    return "ERRO: O correto e: EC2-SEND <hm> <d> <ivB64> <ciphertextB64>";
+                }
+                return ec2SendCommand(user, parts[1], parts[2], parts[3], parts[4]);
 
             case "RH":
                 if (parts.length != 3) {
