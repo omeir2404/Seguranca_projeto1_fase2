@@ -830,6 +830,70 @@ public void RH_sendFile(String house, String device) {
         return false;
     }
 
+    private String getCertCommand(String targetUser) {
+        if (targetUser == null || targetUser.isBlank()) {
+            return "NOK";
+        }
+        if (!users.containsKey(targetUser)) {
+            return "NOUSER";
+        }
+        byte[] certBytes = fileManager.readUserCertificateBytes(targetUser);
+        if (certBytes == null || certBytes.length == 0) {
+            return "NOCERT";
+        }
+        return "OK " + Base64.getEncoder().encodeToString(certBytes);
+    }
+
+    private String putWrappedKeyCommand(String requester, String house, String section, String recipient, String wrappedKeyB64) {
+        if (!houses.containsKey(house)) {
+            return "NOHM";
+        }
+        if (!requester.equals(houses.get(house))) {
+            return "NOPERM";
+        }
+        if (!users.containsKey(recipient)) {
+            return "NOUSER";
+        }
+
+        String sectionName = normalizeSectionName(section);
+        if (sectionName == null || sectionName.equalsIgnoreCase("all")) {
+            return "NOK";
+        }
+
+        try {
+            byte[] wrappedBytes = Base64.getDecoder().decode(wrappedKeyB64);
+            if (wrappedBytes.length == 0) {
+                return "NOK";
+            }
+            boolean stored = fileManager.saveWrappedSectionKey(house, sectionName, requester, recipient, wrappedBytes);
+            return stored ? "OK" : "NOK";
+        } catch (IllegalArgumentException e) {
+            return "NOK";
+        }
+    }
+
+    private String getWrappedKeyCommand(String requester, String house, String section, String owner) {
+        if (!houses.containsKey(house)) {
+            return "NOHM";
+        }
+        String sectionName = normalizeSectionName(section);
+        if (sectionName == null || sectionName.equalsIgnoreCase("all")) {
+            return "NOK";
+        }
+        if (!users.containsKey(owner)) {
+            return "NOUSER";
+        }
+        if (!checkPermissions(house, requester, sectionName)) {
+            return "NOPERM";
+        }
+
+        byte[] wrappedBytes = fileManager.loadWrappedSectionKey(house, sectionName, owner, requester);
+        if (wrappedBytes == null || wrappedBytes.length == 0) {
+            return "NOKEY";
+        }
+        return "OK " + Base64.getEncoder().encodeToString(wrappedBytes);
+    }
+
 //////////////////////////FUNÇÕES AUXILIARES/////////////////////////////////////////
 
 
@@ -844,6 +908,24 @@ public void RH_sendFile(String house, String device) {
         String comando = parts[0].toUpperCase();
     
         switch (comando) {
+            case "GETCERT":
+                if (parts.length != 2) {
+                    return "ERRO: O correto e: GETCERT <user>";
+                }
+                return getCertCommand(parts[1]);
+
+            case "PUTWKEY":
+                if (parts.length != 5) {
+                    return "ERRO: O correto e: PUTWKEY <hm> <s> <user> <wrappedKeyB64>";
+                }
+                return putWrappedKeyCommand(user, parts[1], parts[2], parts[3], parts[4]);
+
+            case "GETWKEY":
+                if (parts.length != 4) {
+                    return "ERRO: O correto e: GETWKEY <hm> <s> <owner>";
+                }
+                return getWrappedKeyCommand(user, parts[1], parts[2], parts[3]);
+
             case "LS":
                 if (parts.length > 2) {
                     return "Erro: O correto é: LS ou LS <hm>";
