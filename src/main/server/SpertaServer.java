@@ -174,9 +174,10 @@ public class SpertaServer extends Thread {
 		verifyPersistenceStructure();
         initialize_server_vars();
 
-        int generatedHashes = fileManager.generateHashesForServerData();
-        System.out.println("[startup][integrity] ficheiros hash gerados/atualizados=" + generatedHashes);
-
+        // int generatedHashes = fileManager.generateHashesForServerData();
+        // System.out.println("[startup][integrity] ficheiros hash gerados/atualizados=" + generatedHashes);
+		fileManager.verifyAllFilesIntegrity();
+		System.out.println("OK"); 
 		cipherPassword = args[firstCredentialArg]; // Used for PBE AES-128 file encryption [cite: 82]
 		keystorePath = args[firstCredentialArg + 1];   // Path to server's keystore [cite: 104]
 		keystorePass = args[firstCredentialArg + 2];

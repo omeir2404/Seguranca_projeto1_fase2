@@ -111,6 +111,16 @@ public class ServerFileManager {
         ensurePersistenceStructure();
     }
 
+    public static String generateHashFromString(String content) throws Exception {
+    MessageDigest digest = MessageDigest.getInstance("SHA-256");
+    byte[] hashBytes = digest.digest(content.getBytes(StandardCharsets.UTF_8));
+    
+    StringBuilder hexString = new StringBuilder();
+    for (byte b : hashBytes) {
+        hexString.append(String.format("%02x", b));
+    }
+    return hexString.toString();
+}
 
     public void initCrypto(String password) {
         try {
@@ -151,7 +161,12 @@ public class ServerFileManager {
             dos.write(iv);
             dos.write(ciphertext);
         }
-    }
+        String hash = generateHashFromString(content);
+        Path hashPath = path.resolveSibling(path.getFileName().toString() + ".hash");
+        Files.writeString(hashPath, hash + System.lineSeparator(), 
+            StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+        }
+    
 
     public String readProtectedFile(Path path) throws Exception {
         if (!Files.exists(path)) return "";
@@ -211,67 +226,110 @@ public class ServerFileManager {
 
     //Generates .hash files for all regular files under server_data.
     //Skips files that are already hash files.
-    public int generateHashesForServerData() {
-        Path serverDataRoot = projectRoot.resolve(SERVER_DATA_DIR).toAbsolutePath().normalize();
-        if (!Files.exists(serverDataRoot) || !Files.isDirectory(serverDataRoot)) {
-            return 0;
-        }
+    // public int generateHashesForServerData() {
+    //     Path serverDataRoot = projectRoot.resolve(SERVER_DATA_DIR).toAbsolutePath().normalize();
+    //     if (!Files.exists(serverDataRoot) || !Files.isDirectory(serverDataRoot)) {
+    //         return 0;
+    //     }
 
-        final int[] generated = {0};
+    //     final int[] generated = {0};
 
-        try {
-            Files.walkFileTree(serverDataRoot, new SimpleFileVisitor<>() {
-                @Override
-                public FileVisitResult visitFile(Path filePath, BasicFileAttributes attrs) {
-                    if (!attrs.isRegularFile()) {
-                        return FileVisitResult.CONTINUE;
-                    }
+    //     try {
+    //         Files.walkFileTree(serverDataRoot, new SimpleFileVisitor<>() {
+    //             @Override
+    //             public FileVisitResult visitFile(Path filePath, BasicFileAttributes attrs) {
+    //                 if (!attrs.isRegularFile()) {
+    //                     return FileVisitResult.CONTINUE;
+    //                 }
 
-                    String fileName = filePath.getFileName().toString();
-                    if (fileName.endsWith(HASH_EXTENSION)) {
-                        return FileVisitResult.CONTINUE;
-                    }
+    //                 String fileName = filePath.getFileName().toString();
+    //                 if (fileName.endsWith(HASH_EXTENSION)) {
+    //                     return FileVisitResult.CONTINUE;
+    //                 }
 
-                    try {
-                        String hash = generateHashFile(filePath);
-                        Path hashPath = filePath.resolveSibling(fileName + HASH_EXTENSION);
-                        Files.writeString(hashPath, hash + System.lineSeparator());
-                        generated[0]++;
-                    } catch (Exception e) {
-                        System.err.println("Erro ao gerar hash para " + filePath + ": " + e.getMessage());
-                    }
+    //                 try {
+    //                     String hash = generateHashFile(filePath);
+    //                     Path hashPath = filePath.resolveSibling(fileName + HASH_EXTENSION);
+    //                     Files.writeString(hashPath, hash + System.lineSeparator());
+    //                     generated[0]++;
+    //                 } catch (Exception e) {
+    //                     System.err.println("Erro ao gerar hash para " + filePath + ": " + e.getMessage());
+    //                 }
 
-                    return FileVisitResult.CONTINUE;
-                }
-            });
-        } catch (IOException e) {
-            System.err.println("Erro ao percorrer ficheiros para gerar hashes: " + e.getMessage());
-        }
+    //                 return FileVisitResult.CONTINUE;
+    //             }.
+    //         });
+    //     } catch (IOException e) {
+    //         System.err.println("Erro ao percorrer ficheiros para gerar hashes: " + e.getMessage());
+    //     }
 
-        return generated[0];
-    }
-    // TODO check if necessary
-    //Verify integrity **after** decryption. Crucial:** If verification fails at any point, print `NOK-INTEGRITY` and terminate immediately.
-    public static void verifyIntegrity(String path) throws Exception{
-        String newHash = ServerFileManager.generateHashFile(path);
+    //     return generated[0];
+    // }
+    
+    
+    public void verifyIntegrity(Path filePath) {
+    try {
+        if (!Files.exists(filePath)) return;
+
+        // 1. Lê e decifra o conteúdo (se a password estiver errada, isto lança exceção)
+        String plaintext = readProtectedFile(filePath);
         
-        try(BufferedReader reader = new BufferedReader(new FileReader(path + ".hash"))){
-            String hashSaved = reader.readLine();
-            if(hashSaved != null){
-                hashSaved = hashSaved.trim();
-            }
-            if(!newHash.equals(hashSaved)){
+        // 2. Calcula o hash do texto limpo
+        String calculatedHash = generateHashFromString(plaintext);
+        Path hashPath = filePath.resolveSibling(filePath.getFileName().toString() + ".hash");
+
+        // Se o .hash não existir, só aceitamos se o ficheiro estiver totalmente vazio (acabou de ser criado)
+        if (!Files.exists(hashPath)) {
+            if (plaintext.isEmpty() || filePath.getFileName().toString().equals("attestation.txt")) {
+                Files.writeString(hashPath, calculatedHash + System.lineSeparator());
+                return;
+            } else {
                 System.out.println("NOK-INTEGRITY");
                 System.exit(1);
-            }else{
-                System.out.println("OK");
-            }
-        }catch(IOException e){
-            System.out.println("NOK-INTEGRITY");
-            System.exit(1);        
         }
     }
 
+        // 3. Lê o hash guardado e compara
+        String savedHash = Files.readString(hashPath).trim();
+        if (!calculatedHash.equals(savedHash)) {
+            System.out.println("NOK-INTEGRITY");
+            System.exit(1);
+        }
+    } catch (Exception e) {
+        // Se falhar a decifragem (password PBE errada) ou houver corrupção
+        System.out.println("NOK-INTEGRITY");
+        System.exit(1);
+    }
+}
+
+public void verifyAllFilesIntegrity() {
+    Path serverDataRoot = projectRoot.resolve(SERVER_DATA_DIR).toAbsolutePath().normalize();
+    if (!Files.exists(serverDataRoot) || !Files.isDirectory(serverDataRoot)) {
+        return;
+    }
+
+    try {
+        Files.walkFileTree(serverDataRoot, new SimpleFileVisitor<>() {
+            @Override
+            public FileVisitResult visitFile(Path filePath, BasicFileAttributes attrs) {
+                if (!attrs.isRegularFile()) return FileVisitResult.CONTINUE;
+
+                String fileName = filePath.getFileName().toString();
+                // Ignorar os próprios ficheiros de hash, ficheiros de chaves (.bin, .cer) e o salt
+                if (fileName.endsWith(".hash") || fileName.endsWith(".bin") || 
+                    fileName.endsWith(".cer") || fileName.equals("pbe.salt")) {
+                    return FileVisitResult.CONTINUE;
+                }
+
+                verifyIntegrity(filePath);
+                return FileVisitResult.CONTINUE;
+            }
+        });
+    } catch (IOException e) {
+        System.out.println("NOK-INTEGRITY");
+        System.exit(1);
+    }
+}
 
 
     //Initializes and validates all file paths based on project structure.

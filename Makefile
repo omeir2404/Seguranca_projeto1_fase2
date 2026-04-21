@@ -101,3 +101,4 @@ clean:
 cleanFULL: clean
 	@rm -rf client_data
 	@rm -rf server_data
+	@rm -f $(SERVER_KEYSTORE) $(SERVER_CERT) $(CLIENT_TRUSTSTORE) $(CLIENT_KEYSTORE)
