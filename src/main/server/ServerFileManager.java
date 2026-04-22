@@ -855,6 +855,15 @@ public Map<String, String> loadHouses() {
         }
     }
 
+    private Path getEncryptedLastCommandsPath() {
+        return projectRoot
+                .resolve(SERVER_DATA_DIR)
+                .resolve(STATES_DIR)
+                .resolve(LAST_COMMANDS_FILENAME)
+                .toAbsolutePath()
+                .normalize();
+    }
+
     public synchronized boolean saveEncryptedLastCommand(String house, String device, String ivB64, String ciphertextB64) {
         if (house == null || house.isBlank() || device == null || device.isBlank()) {
             return false;
@@ -864,7 +873,12 @@ public Map<String, String> loadHouses() {
         }
 
         try {
-            Path target = Paths.get(LAST_COMMANDS_FILENAME).toAbsolutePath().normalize();
+            Path target = getEncryptedLastCommandsPath();
+            Path parent = target.getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
+
             String content = readProtectedFile(target);
             List<String> lines = content.isBlank()
                     ? new ArrayList<>()
@@ -907,7 +921,7 @@ public Map<String, String> loadHouses() {
         }
 
         try {
-            Path target = Paths.get(LAST_COMMANDS_FILENAME).toAbsolutePath().normalize();
+            Path target = getEncryptedLastCommandsPath();
             String content = readProtectedFile(target);
             if (content.isBlank()) {
                 return result;

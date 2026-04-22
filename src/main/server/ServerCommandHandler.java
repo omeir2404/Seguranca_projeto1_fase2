@@ -776,7 +776,7 @@ public class ServerCommandHandler {
         return "OK " + sectionName + " " + owner + " " + Base64.getEncoder().encodeToString(wrappedKey);
     }
 
-    private String ecSendCommand(String requester, String house, String device, String ivB64, String ciphertextB64) {
+    private String ecSendCommand(String requester, String house, String device, String ivB64, String ciphertextB64, String plainValueToken) {
         String normalizedDevice = device == null ? null : device.toUpperCase(Locale.ROOT);
         if (!houses.containsKey(house)) {
             return "NOHM";
@@ -800,6 +800,11 @@ public class ServerCommandHandler {
             return "NOPERM";
         }
 
+        Integer plainValue = parseDeviceValueToken(plainValueToken);
+        if (plainValueToken != null && plainValue == null) {
+            return "NOK";
+        }
+
         try {
             byte[] iv = Base64.getDecoder().decode(ivB64);
             byte[] ciphertext = Base64.getDecoder().decode(ciphertextB64);
@@ -814,8 +819,28 @@ public class ServerCommandHandler {
             return "NOK";
         }
 
+        if (plainValue != null) {
+            // Keep LS updated in-memory without persisting plaintext device values to files.
+            devices.put(normalizedDevice, plainValue);
+        }
+
         updateDeviceLogs("EC " + house + " " + normalizedDevice + " " + ivB64 + " " + ciphertextB64, house, normalizedDevice);
         return "OK";
+    }
+
+    private Integer parseDeviceValueToken(String token) {
+        if (token == null) {
+            return null;
+        }
+        try {
+            int value = Integer.parseInt(token);
+            if (value < 0 || value > 600) {
+                return null;
+            }
+            return value;
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     private static final class RtEntry {
@@ -1130,12 +1155,15 @@ public class ServerCommandHandler {
                     return ecRequestCommand(user, parts[1], parts[2]);
                 }
                 if (parts.length == 5) {
-                    return ecSendCommand(user, parts[1], parts[2], parts[3], parts[4]);
+                    return ecSendCommand(user, parts[1], parts[2], parts[3], parts[4], null);
+                }
+                if (parts.length == 6) {
+                    return ecSendCommand(user, parts[1], parts[2], parts[3], parts[4], parts[5]);
                 }
                 if (parts.length == 4) {
                     return "NOK-PLAINTEXT-DISABLED";
                 }
-                return "ERRO: O correto e: EC <hm> <d> [<ivB64> <ciphertextB64>]";
+                return "ERRO: O correto e: EC <hm> <d> [<ivB64> <ciphertextB64> [<value>]]";
 
             case "RH":
                 if (parts.length != 3) {

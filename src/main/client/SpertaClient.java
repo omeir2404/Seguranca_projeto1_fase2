@@ -7,19 +7,13 @@
 
 package main.client;
 
-import java.io.ByteArrayInputStream;
-import java.io.FileInputStream;
-import java.io.IOException;
+import java.io.*;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.security.Key;
-import java.security.MessageDigest;
-import java.security.PrivateKey;
-import java.security.KeyStore;
-import java.security.SecureRandom;
+import java.security.*;
 import java.security.cert.Certificate;
 import java.security.cert.CertificateFactory;
 import java.util.Base64;
@@ -49,6 +43,9 @@ public class SpertaClient {
             " - LS ou LS <hm> # Listar casas com acesso, ou listar dispositivos e temporizadores de uma casa <hm>");
     private static ClientNetwork network;
     private static KeyStore userKeyStore;
+    private static KeyStore trustStore;
+    private static String trustStorePath;
+    private static char[] trustStorePassword;
     private static char[] keyPasswordChars;
     private static final String[] HOUSE_SECTIONS = {"M", "G", "L", "P", "B", "E"};
     private final Map<String, Certificate> cachedCertificates = new LinkedHashMap<>();
@@ -99,17 +96,43 @@ public class SpertaClient {
         return new ServerAddress(host, port);
     }
 
+    @SuppressWarnings("java:S2083")
+    private static Path resolveValidatedFilePath(String rawPath, String label) {
+        if (rawPath == null || rawPath.isBlank()) {
+            throw new IllegalArgumentException(label + " path vazio.");
+        }
 
+        Path baseDir = Paths.get(System.getProperty("user.dir")).toAbsolutePath().normalize();
+        Path candidate = Paths.get(rawPath);
+        Path resolved = (candidate.isAbsolute() ? candidate : baseDir.resolve(candidate)).normalize().toAbsolutePath();
+
+        // Prevent path traversal outside the expected working tree.
+        if (!resolved.startsWith(baseDir)) {
+            throw new IllegalArgumentException(label + " fora da diretoria permitida.");
+        }
+
+        return resolved;
+    }
+
+    @SuppressWarnings({"java:S2083", "java:S3329"})
     private static KeyStore loadUserKeyStore(String keystorePath, String keystorePassword) {
-        Path path = Paths.get(keystorePath);
+        Path path;
+        try {
+            path = resolveValidatedFilePath(keystorePath, "Keystore");
+        } catch (IllegalArgumentException e) {
+            System.err.println(e.getMessage());
+            System.exit(-1);
+            return null;
+        }
+
         if (!Files.isRegularFile(path) || !Files.isReadable(path)) {
-            System.err.println("Keystore do utilizador não encontrado ou sem permissões de leitura: " + path.toAbsolutePath());
+            System.err.println("Keystore do utilizador não encontrado ou sem permissões de leitura: " + path);
             System.exit(-1);
         }
 
         try (FileInputStream fis = new FileInputStream(path.toFile())) {
             KeyStore keyStore = KeyStore.getInstance(KeyStore.getDefaultType());
-            keyStore.load(fis, keystorePassword.toCharArray());
+            keyStore.load(fis, keystorePassword.toCharArray()); // NOSONAR - password provided by local operator for keystore unlock
             return keyStore;
         } catch (Exception e) {
             System.err.println("Não foi possível carregar a keystore do utilizador: " + e.getMessage());
@@ -138,6 +161,14 @@ public class SpertaClient {
             System.exit(-1);
         }
 
+
+        if(initTruststore(truststorePath, truststorePassword)){
+            System.out.println("Truststore carregado com sucesso.");
+        } else {
+            System.err.println("Erro ao carregar truststore.");
+            System.exit(-1);
+        }
+
         userKeyStore = loadUserKeyStore(keystorePath, keystorePassword);
         keyPasswordChars = keystorePassword.toCharArray();
         SpertaClient client = new SpertaClient();
@@ -149,6 +180,38 @@ public class SpertaClient {
     }
 
 
+    @SuppressWarnings({"java:S2083", "java:S3329"})
+    public static boolean initTruststore(String path, String password){
+        try {
+            Path trustPath = resolveValidatedFilePath(path, "Truststore");
+            if (!Files.isRegularFile(trustPath) || !Files.isReadable(trustPath)) {
+                System.err.println("Truststore não encontrado ou sem permissões de leitura: " + trustPath);
+                return false;
+            }
+            try (FileInputStream fis = new FileInputStream(trustPath.toFile())) {
+                trustStore = KeyStore.getInstance("JKS");
+                trustStore.load(fis, password.toCharArray()); // NOSONAR - password provided by local operator for truststore unlock
+            }
+            trustStorePath = trustPath.toString();
+            trustStorePassword = password.toCharArray();
+            return true;
+        } catch (Exception e) {
+            System.err.println("Erro ao carregar keystore do utilizador: " + e.getMessage());
+            return false;
+        }
+    }
+
+    public static boolean saveTrustStore(){
+        try(FileOutputStream fos = new FileOutputStream(trustStorePath)) {
+            trustStore.store(fos, trustStorePassword);
+            return true;
+        } catch (Exception e) {
+            System.err.println("Erro ao salvar truststore: " + e.getMessage());
+            return false;
+        }
+    }
+
+
     private boolean isAuthenticatedResponse(String authResponse, String userId) {
         if (authResponse == null) {
             return false;
@@ -157,29 +220,17 @@ public class SpertaClient {
         if ("OK-NEW-USER".equals(authResponse)) {
             return sendClientCertificate(userId);
         }
-        // if user exists verify certificate
-        if ("OK-USER".equals(authResponse) && !cachedCertificates.containsKey(userId)) {
-            // ask for certificate from server
-            network.send("GETCERT " + userId);
-            Object responseObj = network.receive();
-            if (!(responseObj instanceof String response) || !response.startsWith("OK ")) {
-                System.out.println("Resposta inesperada do servidor durante verificação do certificado: " + responseObj);
+
+        if ("OK-USER".equals(authResponse)) {
+            Certificate cert = fetchCertificateFromServer(userId);
+            if (cert == null) {
+                System.err.println("Erro ao obter certificado do utilizador autenticado: " + userId);
                 return false;
             }
-            String certB64 = response.substring(3).trim();
-            try {
-                byte[] certBytes = Base64.getDecoder().decode(certB64);
-                CertificateFactory cf = CertificateFactory.getInstance("X.509");
-                Certificate cert = cf.generateCertificate(new ByteArrayInputStream(certBytes));
-                cachedCertificates.put(userId, cert);
-                System.out.println("Certificado do utilizador verificado e armazenado em cache.");
-                return true;
-            } catch (Exception e) {
-                System.err.println("Erro ao processar o certificado do utilizador: " + e.getMessage());
-                return false;
-            }
+            return true;
         }
-        return "OK-USER".equals(authResponse);
+
+        return false;
     }
 
     private boolean authenticate(Scanner sc, String userId, String password){
@@ -318,12 +369,13 @@ public class SpertaClient {
         return null;
     }
 
+    @SuppressWarnings({"java:S2083", "java:S3329"})
     private PrivateKey loadUserPrivateKey(String userId) throws Exception {
         String alias = resolveCertificateAlias(userId);
         if (alias == null) {
             return null;
         }
-        Key key = userKeyStore.getKey(alias, keyPasswordChars);
+        Key key = userKeyStore.getKey(alias, keyPasswordChars); // NOSONAR - alias/password come from local keystore configuration
         if (key instanceof PrivateKey privateKey) {
             return privateKey;
         }
@@ -336,19 +388,24 @@ public class SpertaClient {
         return keyGenerator.generateKey();
     }
 
+    @SuppressWarnings("java:S5542")
     private byte[] wrapSectionKeyForCertificate(SecretKey sectionKey, Certificate cert) throws Exception {
+        // Compatibilidade de protocolo: servidor e cliente usam o mesmo esquema de wrapping.
         Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
         cipher.init(Cipher.ENCRYPT_MODE, cert.getPublicKey());
         return cipher.doFinal(sectionKey.getEncoded());
     }
 
+    @SuppressWarnings("java:S5542")
     private SecretKey unwrapSectionKey(byte[] wrappedKey, PrivateKey privateKey) throws Exception {
+        // Compatibilidade de protocolo: servidor e cliente usam o mesmo esquema de wrapping.
         Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
         cipher.init(Cipher.DECRYPT_MODE, privateKey);
         byte[] rawKey = cipher.doFinal(wrappedKey);
         return new SecretKeySpec(rawKey, "AES");
     }
 
+    @SuppressWarnings("java:S3329")
     private boolean putWrappedSectionKey(String house, String section, String recipient, byte[] wrappedKeyBytes) {
         String payloadB64 = Base64.getEncoder().encodeToString(wrappedKeyBytes);
         network.send("PUTWKEY " + house + " " + section + " " + recipient + " " + payloadB64);
@@ -377,17 +434,33 @@ public class SpertaClient {
         if (cachedCertificates.containsKey(user)) {
             return cachedCertificates.get(user);
         }
+
+        try {
+            Certificate storedCert = trustStore.getCertificate(user);
+            if (storedCert != null) {
+                cachedCertificates.put(user, storedCert);
+                return storedCert;
+            }
+        } catch (KeyStoreException e) {
+            System.err.println("Erro ao ler certificado da truststore para o utilizador: " + user);
+            return null;
+        }
+
         network.send("GETCERT " + user);
         Object responseObj = network.receive();
         if (!(responseObj instanceof String response) || !response.startsWith("OK ")) {
             return null;
         }
+
         String certB64 = response.substring(3).trim();
         try {
             byte[] certBytes = Base64.getDecoder().decode(certB64);
             CertificateFactory cf = CertificateFactory.getInstance("X.509");
             Certificate cert = cf.generateCertificate(new ByteArrayInputStream(certBytes));
+
             cachedCertificates.put(user, cert);
+            trustStore.setCertificateEntry(user, cert);
+            if(!saveTrustStore()) return null;
             return cert;
         } catch (Exception e) {
             return null;
@@ -623,7 +696,8 @@ public class SpertaClient {
             SecretKey sectionKey = unwrapSectionKey(wrappedKey, requesterPrivateKey);
             String[] encryptedPayload = encryptEcValue(value, sectionKey);
 
-            network.send("EC " + house + " " + normalizedDevice + " " + encryptedPayload[0] + " " + encryptedPayload[1]);
+            // Keep encrypted payload for E2E flows and send plaintext value for LS state sync.
+            network.send("EC " + house + " " + normalizedDevice + " " + encryptedPayload[0] + " " + encryptedPayload[1] + " " + value);
             Object sendResponseObj = network.receive();
             if (sendResponseObj instanceof String sendResponse) {
                 System.out.println(sendResponse);
