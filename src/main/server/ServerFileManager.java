@@ -224,48 +224,6 @@ public class ServerFileManager {
         return generateHashFile(Paths.get(path));
     }
 
-    //Generates .hash files for all regular files under server_data.
-    //Skips files that are already hash files.
-    // public int generateHashesForServerData() {
-    //     Path serverDataRoot = projectRoot.resolve(SERVER_DATA_DIR).toAbsolutePath().normalize();
-    //     if (!Files.exists(serverDataRoot) || !Files.isDirectory(serverDataRoot)) {
-    //         return 0;
-    //     }
-
-    //     final int[] generated = {0};
-
-    //     try {
-    //         Files.walkFileTree(serverDataRoot, new SimpleFileVisitor<>() {
-    //             @Override
-    //             public FileVisitResult visitFile(Path filePath, BasicFileAttributes attrs) {
-    //                 if (!attrs.isRegularFile()) {
-    //                     return FileVisitResult.CONTINUE;
-    //                 }
-
-    //                 String fileName = filePath.getFileName().toString();
-    //                 if (fileName.endsWith(HASH_EXTENSION)) {
-    //                     return FileVisitResult.CONTINUE;
-    //                 }
-
-    //                 try {
-    //                     String hash = generateHashFile(filePath);
-    //                     Path hashPath = filePath.resolveSibling(fileName + HASH_EXTENSION);
-    //                     Files.writeString(hashPath, hash + System.lineSeparator());
-    //                     generated[0]++;
-    //                 } catch (Exception e) {
-    //                     System.err.println("Erro ao gerar hash para " + filePath + ": " + e.getMessage());
-    //                 }
-
-    //                 return FileVisitResult.CONTINUE;
-    //             }.
-    //         });
-    //     } catch (IOException e) {
-    //         System.err.println("Erro ao percorrer ficheiros para gerar hashes: " + e.getMessage());
-    //     }
-
-    //     return generated[0];
-    // }
-    
     
     public void verifyIntegrity(Path filePath) {
     try {
@@ -399,8 +357,8 @@ public void verifyAllFilesIntegrity() {
         }
     }
 
-    // ============ FILE LOADING METHODS ============
 
+    // ============ FILE LOADING METHODS ============
 
     /**
      * Loads all users from the users file into a Map.
