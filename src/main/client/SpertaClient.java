@@ -40,7 +40,7 @@ public class SpertaClient {
             " - RT <hm> # Receber a informacao do ultimo comando enviado a cada dispositivo da casa <hm> (com permissoes)",
             " - RH <hm> <d> # Receber o historico (ficheiro .csv) de comandos enviados ao dispositivo <d> da casa <hm> (com permissoes)",
             " - EXIT ou QUIT # Terminar a ligacao ao servidor e fechar o cliente",
-            " - LS ou LS <hm> # Listar casas com acesso, ou listar dispositivos e temporizadores de uma casa <hm>");
+            " - LS ou LS <hm> # Listar casas com acesso, ou listar dispositivos acessiveis de uma casa <hm>");
     private static ClientNetwork network;
     private static KeyStore userKeyStore;
     private static KeyStore trustStore;
@@ -696,8 +696,7 @@ public class SpertaClient {
             SecretKey sectionKey = unwrapSectionKey(wrappedKey, requesterPrivateKey);
             String[] encryptedPayload = encryptEcValue(value, sectionKey);
 
-            // Keep encrypted payload for E2E flows and send plaintext value for LS state sync.
-            network.send("EC " + house + " " + normalizedDevice + " " + encryptedPayload[0] + " " + encryptedPayload[1] + " " + value);
+            network.send("EC " + house + " " + normalizedDevice + " " + encryptedPayload[0] + " " + encryptedPayload[1]);
             Object sendResponseObj = network.receive();
             if (sendResponseObj instanceof String sendResponse) {
                 System.out.println(sendResponse);

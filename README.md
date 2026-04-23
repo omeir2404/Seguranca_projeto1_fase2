@@ -43,6 +43,14 @@ make server
 make client
 ```
 
+Para correr em duas máquinas diferentes no laboratório, gerar primeiro os materiais TLS com o hostname/IP reais da máquina do servidor:
+
+```bash
+make certs_lab TLS_SERVER_HOSTNAME=nome-ou-host-da-maquina1 TLS_SERVER_IP=IP-da-maquina1 SERVER_HOST=nome-ou-host-da-maquina1 SERVER_PORT=22345
+```
+
+Se o cliente se ligar por IP em vez de hostname DNS, usar esse mesmo IP em `SERVER_HOST` e garantir que ele aparece no certificado via `TLS_SERVER_IP`.
+
 Para a atestação remota passar, o cliente deve ter acesso a `dist/SpertaClient.jar`. Os alvos `make client`, `make client2`, `make wrongclient` e `make client_no_port` já geram e executam esse JAR automaticamente.
 
 Também existem alvos auxiliares:
@@ -51,6 +59,8 @@ Também existem alvos auxiliares:
 - `make wrongclient`
 - `make server_no_port`
 - `make client_no_port`
+- `make certs`
+- `make certs_lab TLS_SERVER_HOSTNAME=<host> TLS_SERVER_IP=<ip> SERVER_HOST=<host-ou-ip> SERVER_PORT=<porto>`
 - `make createServerJAR`
 - `make createClientJar`
 - `make createJARs`
@@ -91,7 +101,7 @@ make serverJAR
 Executar cliente pelo JAR (substituir pelos teus valores):
 
 ```bash
-java -jar dist/SpertaClient.jar localhost:22345 clienttruststore.jks truststorepass clientkeystore.jks clientkeypass Nexus ehBueFixe
+java -jar dist/SpertaClient.jar <IP/hostname>:22345 clienttruststore.jks truststorepass clientkeystore.jks clientkeypass Nexus ehBueFixe
 ```
 
 ### Compilação manual (alternativa)
@@ -109,8 +119,26 @@ java -cp bin main.server.SpertaServer 22345 cipherpass serverkeystore.jks keysto
 Cliente:
 
 ```bash
-java -cp bin main.client.SpertaClient localhost:22345 clienttruststore.jks truststorepass clientkeystore.jks clientkeypass Nexus ehBueFixe
+java -cp bin main.client.SpertaClient <IP/hostname>:22345 clienttruststore.jks truststorepass clientkeystore.jks clientkeypass Nexus ehBueFixe
 ```
+
+## TLS em duas máquinas
+
+O cliente valida o certificado do servidor com verificação de hostname/IP. Por isso, o certificado do servidor tem de incluir no SAN o nome ou IP exato usado no argumento `<serverAddress>`.
+
+Exemplo para laboratório:
+
+```bash
+make certs_lab TLS_SERVER_HOSTNAME=lab-srv1 TLS_SERVER_IP=192.168.1.10 SERVER_HOST=192.168.1.10 SERVER_PORT=22345
+make server
+make client
+```
+
+Neste exemplo:
+
+- o certificado do servidor fica válido para `lab-srv1` e `192.168.1.10`
+- o cliente liga-se a `192.168.1.10:22345`
+- a truststore do cliente já contém o certificado exportado desse servidor
 
 ## Fluxo de autenticação e atestação
 
@@ -203,7 +231,9 @@ No cliente, o ficheiro e guardado em:
 ### `LS` e `LS <hm>` (extra)
 
 - `LS`: lista casas onde o utilizador tem acesso.
-- `LS <hm>`: lista dispositivos acessíveis dessa casa e o valor atual.
+- `LS <hm>`: lista apenas os dispositivos acessíveis dessa casa.
+
+Observação: para preservar a confidencialidade fim-a-fim do valor enviado em `EC`, o comando `LS <hm>` não mostra o valor atual. Para obter o estado atual legível, usar `RT <hm>`.
 
 Possíveis respostas: `NOHM`, `NOPERM`, `NODATA`.
 

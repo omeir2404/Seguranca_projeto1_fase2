@@ -26,7 +26,6 @@ public class ServerCommandHandler {
     private static String HOUSE_METADATA_FILE = "server_data/metadata/house_metadata.txt";
     private static String COUNTERS_FILE = "server_data/metadata/section_counters.txt";
     private static String DEVICE_SECTIONS_FILE = "server_data/metadata/device_sections.txt";
-    private static String LAST_COMMANDS_FILE = "server_data/states/last_commands.txt";
     private static String HOUSE_AUDIT_LOG = "server_data/metadata/houses.log";
     private static String LOG_DIR = "server_data/homes";
     private static final String LOGS_HEADER = "time; command";
@@ -48,7 +47,6 @@ public class ServerCommandHandler {
         HOUSE_METADATA_FILE = serverDataRoot.resolve("metadata").resolve("house_metadata.txt").toString();
         COUNTERS_FILE = serverDataRoot.resolve("metadata").resolve("section_counters.txt").toString();
         DEVICE_SECTIONS_FILE = serverDataRoot.resolve("metadata").resolve("device_sections.txt").toString();
-        LAST_COMMANDS_FILE = serverDataRoot.resolve("states").resolve("last_commands.txt").toString();
         HOUSE_AUDIT_LOG = serverDataRoot.resolve("metadata").resolve("houses.log").toString();
         LOG_DIR = serverDataRoot.resolve("homes").toString();
         this.serverNetwork = serverNetwork;
@@ -152,39 +150,6 @@ public class ServerCommandHandler {
         }
         return null;
     }
-
-    private synchronized void persistLastCommandValue(String house, String device, int value) {
-        try {
-            ensureFileHeader(LAST_COMMANDS_FILE, "Home:Device:Value");
-            List<String> lines = readLines(LAST_COMMANDS_FILE);
-
-            if (lines.isEmpty()) {
-                lines.add("Home:Device:Value");
-            }
-
-            String key = house + ":" + device + ":";
-            String replacement = house + ":" + device + ":" + value;
-            boolean updated = false;
-
-            for (int i = 1; i < lines.size(); i++) {
-                String line = lines.get(i).trim();
-                if (line.startsWith(key)) {
-                    lines.set(i, replacement);
-                    updated = true;
-                    break;
-                }
-            }
-
-            if (!updated) {
-                lines.add(replacement);
-            }
-
-            writeLines(LAST_COMMANDS_FILE, lines);
-        } catch (IOException e) {
-            System.err.println("Erro ao persistir último estado do dispositivo: " + e.getMessage());
-        }
-    }
-
 
     private void updateDeviceLogs(String command, String house, String device){
         try {
@@ -630,7 +595,6 @@ public class ServerCommandHandler {
         }
         devices.put(deviceName, 0);
         persistDeviceSection(house, deviceName, sectionName);
-        persistLastCommandValue(house, deviceName, 0);
   
         updateDeviceLogs("RD " + house + " " + sectionName, house, deviceName);
         return "OK";
@@ -776,7 +740,7 @@ public class ServerCommandHandler {
         return "OK " + sectionName + " " + owner + " " + Base64.getEncoder().encodeToString(wrappedKey);
     }
 
-    private String ecSendCommand(String requester, String house, String device, String ivB64, String ciphertextB64, String plainValueToken) {
+    private String ecSendCommand(String requester, String house, String device, String ivB64, String ciphertextB64) {
         String normalizedDevice = device == null ? null : device.toUpperCase(Locale.ROOT);
         if (!houses.containsKey(house)) {
             return "NOHM";
@@ -800,11 +764,6 @@ public class ServerCommandHandler {
             return "NOPERM";
         }
 
-        Integer plainValue = parseDeviceValueToken(plainValueToken);
-        if (plainValueToken != null && plainValue == null) {
-            return "NOK";
-        }
-
         try {
             byte[] iv = Base64.getDecoder().decode(ivB64);
             byte[] ciphertext = Base64.getDecoder().decode(ciphertextB64);
@@ -819,28 +778,8 @@ public class ServerCommandHandler {
             return "NOK";
         }
 
-        if (plainValue != null) {
-            // Keep LS updated in-memory without persisting plaintext device values to files.
-            devices.put(normalizedDevice, plainValue);
-        }
-
         updateDeviceLogs("EC " + house + " " + normalizedDevice + " " + ivB64 + " " + ciphertextB64, house, normalizedDevice);
         return "OK";
-    }
-
-    private Integer parseDeviceValueToken(String token) {
-        if (token == null) {
-            return null;
-        }
-        try {
-            int value = Integer.parseInt(token);
-            if (value < 0 || value > 600) {
-                return null;
-            }
-            return value;
-        } catch (NumberFormatException e) {
-            return null;
-        }
     }
 
     private static final class RtEntry {
@@ -1155,15 +1094,12 @@ public class ServerCommandHandler {
                     return ecRequestCommand(user, parts[1], parts[2]);
                 }
                 if (parts.length == 5) {
-                    return ecSendCommand(user, parts[1], parts[2], parts[3], parts[4], null);
+                    return ecSendCommand(user, parts[1], parts[2], parts[3], parts[4]);
                 }
-                if (parts.length == 6) {
-                    return ecSendCommand(user, parts[1], parts[2], parts[3], parts[4], parts[5]);
-                }
-                if (parts.length == 4) {
+                if (parts.length >= 4) {
                     return "NOK-PLAINTEXT-DISABLED";
                 }
-                return "ERRO: O correto e: EC <hm> <d> [<ivB64> <ciphertextB64> [<value>]]";
+                return "ERRO: O correto e: EC <hm> <d> [<ivB64> <ciphertextB64>]";
 
             case "RH":
                 if (parts.length != 3) {
@@ -1198,7 +1134,7 @@ public class ServerCommandHandler {
             StringBuilder result = new StringBuilder();
             for (String deviceName : devices.keySet()) {
                 if (hasDeviceAccess(house, user, deviceName)) {
-                    result.append(deviceName).append(" ").append(devices.get(deviceName)).append("\n");
+                    result.append(deviceName).append("\n");
                 }
             }
             return result.toString().trim();

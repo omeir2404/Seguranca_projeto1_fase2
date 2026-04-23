@@ -108,19 +108,23 @@ public class ServerFileManager {
 
     public ServerFileManager() {
         initializeFilePaths();
-        ensurePersistenceStructure();
+        ensurePersistenceDirectories();
     }
 
     public static String generateHashFromString(String content) throws Exception {
-    MessageDigest digest = MessageDigest.getInstance("SHA-256");
-    byte[] hashBytes = digest.digest(content.getBytes(StandardCharsets.UTF_8));
-    
-    StringBuilder hexString = new StringBuilder();
-    for (byte b : hashBytes) {
-        hexString.append(String.format("%02x", b));
+        return generateHashFromBytes(content.getBytes(StandardCharsets.UTF_8));
     }
-    return hexString.toString();
-}
+
+    public static String generateHashFromBytes(byte[] content) throws Exception {
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        byte[] hashBytes = digest.digest(content);
+
+        StringBuilder hexString = new StringBuilder();
+        for (byte b : hashBytes) {
+            hexString.append(String.format("%02x", b));
+        }
+        return hexString.toString();
+    }
 
     public void initCrypto(String password) {
         try {
@@ -165,7 +169,7 @@ public class ServerFileManager {
         Path hashPath = path.resolveSibling(path.getFileName().toString() + ".hash");
         Files.writeString(hashPath, hash + System.lineSeparator(), 
             StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
-        }
+    }
     
 
     public String readProtectedFile(Path path) throws Exception {
@@ -225,69 +229,84 @@ public class ServerFileManager {
     }
 
     
-    public void verifyIntegrity(Path filePath) {
-    try {
-        if (!Files.exists(filePath)) return;
-
-        // 1. Lê e decifra o conteúdo (se a password estiver errada, isto lança exceção)
-        String plaintext = readProtectedFile(filePath);
-        
-        // 2. Calcula o hash do texto limpo
-        String calculatedHash = generateHashFromString(plaintext);
-        Path hashPath = filePath.resolveSibling(filePath.getFileName().toString() + ".hash");
-
-        // Se o .hash não existir, só aceitamos se o ficheiro estiver totalmente vazio (acabou de ser criado)
-        if (!Files.exists(hashPath)) {
-            if (plaintext.isEmpty() || filePath.getFileName().toString().equals("attestation.txt")) {
-                Files.writeString(hashPath, calculatedHash + System.lineSeparator());
-                return;
-            } else {
-                System.out.println("NOK-INTEGRITY");
-                System.exit(1);
-        }
-    }
-
-        // 3. Lê o hash guardado e compara
-        String savedHash = Files.readString(hashPath).trim();
-        if (!calculatedHash.equals(savedHash)) {
-            System.out.println("NOK-INTEGRITY");
-            System.exit(1);
-        }
-    } catch (Exception e) {
-        // Se falhar a decifragem (password PBE errada) ou houver corrupção
+    private void failIntegrity() {
         System.out.println("NOK-INTEGRITY");
         System.exit(1);
     }
-}
 
-public void verifyAllFilesIntegrity() {
-    Path serverDataRoot = projectRoot.resolve(SERVER_DATA_DIR).toAbsolutePath().normalize();
-    if (!Files.exists(serverDataRoot) || !Files.isDirectory(serverDataRoot)) {
-        return;
+    private String readSavedHash(Path filePath) throws Exception {
+        Path hashPath = filePath.resolveSibling(filePath.getFileName().toString() + HASH_EXTENSION);
+        if (!Files.isRegularFile(hashPath)) {
+            throw new IOException("Hash em falta para " + filePath.getFileName());
+        }
+        return Files.readString(hashPath).trim();
     }
 
-    try {
-        Files.walkFileTree(serverDataRoot, new SimpleFileVisitor<>() {
-            @Override
-            public FileVisitResult visitFile(Path filePath, BasicFileAttributes attrs) {
-                if (!attrs.isRegularFile()) return FileVisitResult.CONTINUE;
+    public void verifyIntegrity(Path filePath) {
+        try {
+            if (!Files.exists(filePath)) {
+                return;
+            }
 
-                String fileName = filePath.getFileName().toString();
-                // Ignorar os próprios ficheiros de hash, ficheiros de chaves (.bin, .cer) e o salt
-                if (fileName.endsWith(".hash") || fileName.endsWith(".bin") || 
-                    fileName.endsWith(".cer") || fileName.equals("pbe.salt")) {
+            String plaintext = readProtectedFile(filePath);
+            String calculatedHash = generateHashFromString(plaintext);
+            String savedHash = readSavedHash(filePath);
+            if (!calculatedHash.equals(savedHash)) {
+                failIntegrity();
+            }
+        } catch (Exception e) {
+            failIntegrity();
+        }
+    }
+
+    public void verifyBinaryIntegrity(Path filePath) {
+        try {
+            if (!Files.exists(filePath)) {
+                return;
+            }
+
+            byte[] raw = Files.readAllBytes(filePath);
+            String calculatedHash = generateHashFromBytes(raw);
+            String savedHash = readSavedHash(filePath);
+            if (!calculatedHash.equals(savedHash)) {
+                failIntegrity();
+            }
+        } catch (Exception e) {
+            failIntegrity();
+        }
+    }
+
+    public void verifyAllFilesIntegrity() {
+        Path serverDataRoot = projectRoot.resolve(SERVER_DATA_DIR).toAbsolutePath().normalize();
+        if (!Files.exists(serverDataRoot) || !Files.isDirectory(serverDataRoot)) {
+            return;
+        }
+
+        try {
+            Files.walkFileTree(serverDataRoot, new SimpleFileVisitor<>() {
+                @Override
+                public FileVisitResult visitFile(Path filePath, BasicFileAttributes attrs) {
+                    if (!attrs.isRegularFile()) {
+                        return FileVisitResult.CONTINUE;
+                    }
+
+                    String fileName = filePath.getFileName().toString();
+                    if (fileName.endsWith(HASH_EXTENSION) || fileName.equals("pbe.salt")) {
+                        return FileVisitResult.CONTINUE;
+                    }
+
+                    if (fileName.endsWith(".bin") || fileName.endsWith(".cer")) {
+                        verifyBinaryIntegrity(filePath);
+                    } else {
+                        verifyIntegrity(filePath);
+                    }
                     return FileVisitResult.CONTINUE;
                 }
-
-                verifyIntegrity(filePath);
-                return FileVisitResult.CONTINUE;
-            }
-        });
-    } catch (IOException e) {
-        System.out.println("NOK-INTEGRITY");
-        System.exit(1);
+            });
+        } catch (IOException e) {
+            failIntegrity();
+        }
     }
-}
 
 
     //Initializes and validates all file paths based on project structure.
@@ -319,9 +338,7 @@ public void verifyAllFilesIntegrity() {
 
         return projectRoot;
     }
-
-
-    public void ensurePersistenceStructure() {
+    public void ensurePersistenceDirectories() {
         Path serverDataRoot = projectRoot.resolve(SERVER_DATA_DIR);
         Path authDir = serverDataRoot.resolve(AUTH_DIR);
         Path metadataDir = serverDataRoot.resolve(METADATA_DIR);
@@ -337,23 +354,41 @@ public void verifyAllFilesIntegrity() {
             Files.createDirectories(metadataDir);
             Files.createDirectories(statesDir);
             Files.createDirectories(homesDir);
-
-            ensureFileExists(authDir.resolve(USERS_FILENAME));
-            ensureFileExists(authDir.resolve(ATTESTATION_FILENAME));
-            ensureFileExists(metadataDir.resolve(HOUSES_FILENAME));
-            ensureFileExists(metadataDir.resolve(PERMISSIONS_FILENAME));
-            ensureFileExists(metadataDir.resolve(HOUSE_METADATA_FILENAME));
-            ensureFileExists(metadataDir.resolve(SECTION_COUNTERS_FILENAME));
-            ensureFileExists(statesDir.resolve(LAST_COMMANDS_FILENAME));
         } catch (IOException e) {
             System.err.println("Erro ao preparar estrutura de persistência: " + e.getMessage());
             System.exit(-1);
         }
     }
 
-    private void ensureFileExists(Path filePath) throws IOException {
+    public void ensurePersistenceStructure() {
+        ensurePersistenceDirectories();
+
+        try {
+            ensureProtectedFileExists(projectRoot.resolve(SERVER_DATA_DIR).resolve(AUTH_DIR).resolve(USERS_FILENAME));
+            ensureProtectedFileExists(projectRoot.resolve(SERVER_DATA_DIR).resolve(AUTH_DIR).resolve(ATTESTATION_FILENAME));
+            ensureProtectedFileExists(projectRoot.resolve(SERVER_DATA_DIR).resolve(METADATA_DIR).resolve(HOUSES_FILENAME));
+            ensureProtectedFileExists(projectRoot.resolve(SERVER_DATA_DIR).resolve(METADATA_DIR).resolve(PERMISSIONS_FILENAME));
+            ensureProtectedFileExists(projectRoot.resolve(SERVER_DATA_DIR).resolve(METADATA_DIR).resolve(HOUSE_METADATA_FILENAME));
+            ensureProtectedFileExists(projectRoot.resolve(SERVER_DATA_DIR).resolve(METADATA_DIR).resolve(SECTION_COUNTERS_FILENAME));
+            ensureProtectedFileExists(projectRoot.resolve(SERVER_DATA_DIR).resolve(STATES_DIR).resolve(LAST_COMMANDS_FILENAME));
+        } catch (Exception e) {
+            System.err.println("Erro ao preparar estrutura de persistência: " + e.getMessage());
+            System.exit(-1);
+        }
+    }
+
+    private void ensureProtectedFileExists(Path filePath) throws Exception {
         if (!Files.exists(filePath)) {
-            Files.createFile(filePath);
+            Path parent = filePath.getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
+            writeProtectedFile(filePath, "");
+        } else {
+            Path hashPath = filePath.resolveSibling(filePath.getFileName().toString() + HASH_EXTENSION);
+            if (!Files.exists(hashPath) && Files.size(filePath) == 0L) {
+                writeProtectedFile(filePath, "");
+            }
         }
     }
 
@@ -610,7 +645,7 @@ public Map<String, String> loadHouses() {
                 }
 
                 String[] cmdParts = commandPart.split("\\s+");
-                if (cmdParts.length >= 4 && EC_COMMAND.equalsIgnoreCase(cmdParts[0])) {
+                if (cmdParts.length == 4 && EC_COMMAND.equalsIgnoreCase(cmdParts[0])) {
                     if (!expectedHouse.equalsIgnoreCase(cmdParts[1]) || !expectedDevice.equalsIgnoreCase(cmdParts[2])) {
                         continue;
                     }
@@ -621,7 +656,6 @@ public Map<String, String> loadHouses() {
                             lastValue = parsed;
                         }
                     } catch (NumberFormatException ignored) {
-                        System.err.println("Valor inválido no log: " + cmdParts[3]);
                     }
                 }
             }
@@ -743,6 +777,7 @@ public Map<String, String> loadHouses() {
             if (!Files.isRegularFile(certPath)) {
                 return null;
             }
+            verifyBinaryIntegrity(certPath);
             return Files.readAllBytes(certPath);
         } catch (Exception e) {
             return null;
@@ -807,6 +842,7 @@ public Map<String, String> loadHouses() {
             if (!Files.isRegularFile(keyPath)) {
                 return null;
             }
+            verifyBinaryIntegrity(keyPath);
             return Files.readAllBytes(keyPath);
         } catch (Exception e) {
             return null;
@@ -921,20 +957,21 @@ public Map<String, String> loadHouses() {
      * Retrieves the expected attestation data from the attestation file.
      */
     public String getAttestationData() {
-        String expectedAttestation = null;
-        try (BufferedReader reader = new BufferedReader(new FileReader(attestationFile))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                line = line.trim();
+        try {
+            String content = readProtectedFile(Paths.get(attestationFile).toAbsolutePath().normalize());
+            if (content.isBlank()) {
+                return null;
+            }
+            for (String rawLine : content.split("\\r?\\n")) {
+                String line = rawLine.trim();
                 if (!line.isEmpty()) {
-                    expectedAttestation = line;
-                    break;
+                    return line;
                 }
             }
-        } catch (IOException e) {
+        } catch (Exception e) {
             System.err.println("Erro ao ler " + attestationFile + ": " + e.getMessage());
         }
-        return expectedAttestation;
+        return null;
     }
 
     public Path getReferenceClientJarPath() {

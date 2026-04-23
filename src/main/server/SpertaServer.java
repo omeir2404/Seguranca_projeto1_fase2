@@ -143,8 +143,11 @@ public class SpertaServer extends Thread {
 		return MessageDigest.isEqual(storedHash, candidateHash);
 	}
 
-    public static void initialize_server_vars() {
+    private static void initializeCrypto() {
 		fileManager.initCrypto(cipherPassword);
+    }
+
+    public static void initialize_server_vars() {
         users = fileManager.loadUsers();
         houses = fileManager.loadHouses();
         permissions = fileManager.loadPermissions();
@@ -171,12 +174,13 @@ public class SpertaServer extends Thread {
 		keystorePass = args[firstCredentialArg + 2];
 
         initializeFileManager();
+        initializeCrypto();
 		verifyPersistenceStructure();
+		fileManager.verifyAllFilesIntegrity();
         initialize_server_vars();
 
         // int generatedHashes = fileManager.generateHashesForServerData();
         // System.out.println("[startup][integrity] ficheiros hash gerados/atualizados=" + generatedHashes);
-		fileManager.verifyAllFilesIntegrity();
 		System.out.println("OK"); 
 		cipherPassword = args[firstCredentialArg]; // Used for PBE AES-128 file encryption [cite: 82]
 		keystorePath = args[firstCredentialArg + 1];   // Path to server's keystore [cite: 104]

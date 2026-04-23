@@ -21,14 +21,18 @@ CLIENT_TRUSTSTORE_PASS = truststorepass
 CLIENT_KEYSTORE_PASS = clientkeypass
 SERVER_CERT_ALIAS = sperta-server
 CLIENT_CERT_ALIAS = sperta-client
-SERVER_CERT_DNAME = CN=localhost, OU=SC, O=FCUL, L=Lisbon, ST=Lisbon, C=PT
-SERVER_CERT_SAN = dns:localhost,ip:127.0.0.1
-SERVER_ARGS = 2223 cipherpass serverkeystore.jks keystorepass
+TLS_SERVER_HOSTNAME ?= localhost
+TLS_SERVER_IP ?= 127.0.0.1
+SERVER_CERT_DNAME = CN=$(TLS_SERVER_HOSTNAME), OU=SC, O=FCUL, L=Lisbon, ST=Lisbon, C=PT
+SERVER_CERT_SAN = dns:$(TLS_SERVER_HOSTNAME),ip:$(TLS_SERVER_IP)
+SERVER_PORT ?= 2223
+SERVER_HOST ?= $(TLS_SERVER_HOSTNAME)
+SERVER_ARGS = $(SERVER_PORT) cipherpass serverkeystore.jks keystorepass
 CLIENT_CLASS = main.client.SpertaClient
-CLIENT_ARGS = localhost:2223 clienttruststore.jks truststorepass clientkeystore.jks clientkeypass Nexus ehBueFixe
-CLIENT_ARGS2 = localhost:2223 clienttruststore.jks truststorepass clientkeystore.jks clientkeypass Eclipse ATuaMae
-CLIENT_WRONG_ARGS = localhost:2223 clienttruststore.jks truststorepass clientkeystore.jks clientkeypass Nexus Eclipsew
-CLIENT_ARGS_NO_PORT = localhost clienttruststore.jks truststorepass clientkeystore.jks clientkeypass Nexus ehBueFixe
+CLIENT_ARGS = $(SERVER_HOST):$(SERVER_PORT) clienttruststore.jks truststorepass clientkeystore.jks clientkeypass Nexus ehBueFixe
+CLIENT_ARGS2 = $(SERVER_HOST):$(SERVER_PORT) clienttruststore.jks truststorepass clientkeystore.jks clientkeypass Eclipse ATuaMae
+CLIENT_WRONG_ARGS = $(SERVER_HOST):$(SERVER_PORT) clienttruststore.jks truststorepass clientkeystore.jks clientkeypass Nexus Eclipsew
+CLIENT_ARGS_NO_PORT = $(SERVER_HOST) clienttruststore.jks truststorepass clientkeystore.jks clientkeypass Nexus ehBueFixe
 
 
 compile:
@@ -53,7 +57,12 @@ certs:
 	@$(KEYTOOL) -exportcert -alias $(SERVER_CERT_ALIAS) -keystore $(SERVER_KEYSTORE) -storepass $(SERVER_KEYSTORE_PASS) -rfc -file $(SERVER_CERT)
 	@$(KEYTOOL) -importcert -alias $(SERVER_CERT_ALIAS) -file $(SERVER_CERT) -keystore $(CLIENT_TRUSTSTORE) -storepass $(CLIENT_TRUSTSTORE_PASS) -noprompt
 	@$(KEYTOOL) -genkeypair -alias $(CLIENT_CERT_ALIAS) -keyalg RSA -keysize 2048 -validity 3650 -keystore $(CLIENT_KEYSTORE) -storepass $(CLIENT_KEYSTORE_PASS) -keypass $(CLIENT_KEYSTORE_PASS) -dname "CN=client-default, OU=SC, O=FCUL, L=Lisbon, ST=Lisbon, C=PT"
-	@echo "TLS materials updated: $(SERVER_KEYSTORE), $(SERVER_CERT), $(CLIENT_TRUSTSTORE), $(CLIENT_KEYSTORE)"
+	@echo "TLS materials updated for hostname $(TLS_SERVER_HOSTNAME) and IP $(TLS_SERVER_IP): $(SERVER_KEYSTORE), $(SERVER_CERT), $(CLIENT_TRUSTSTORE), $(CLIENT_KEYSTORE)"
+
+certs_lab: certs
+	@echo "Lab TLS setup ready."
+	@echo "Server certificate SAN: DNS=$(TLS_SERVER_HOSTNAME), IP=$(TLS_SERVER_IP)"
+	@echo "Use clients with SERVER_HOST=$(SERVER_HOST) SERVER_PORT=$(SERVER_PORT)"
 
 server: compile
 	$(JAVA) -cp $(BIN_DIR) $(SERVER_CLASS) $(SERVER_ARGS)
@@ -91,7 +100,7 @@ serverJAR: createServerJAR
 	java -jar $(DIST_DIR)/SpertaServer.jar 22345 cipherpass serverkeystore.jks keystorepass
 
 clientJAR: createClientJar
-	@echo "Uso: java -jar $(DIST_DIR)/SpertaClient.jar localhost:22345 <truststore> <password-truststore> <keystore> <password-keystore> <user-id> <password>"
+	@echo "Uso: java -jar $(DIST_DIR)/SpertaClient.jar <IP/hostname>[:Port] <truststore> <password-truststore> <keystore> <password-keystore> <user-id> <password>"
 
 
 clean:
