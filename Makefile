@@ -1,9 +1,9 @@
- ##############################################################
- #         Autores:                Numero Aluno:              # 
- #       - Omeir Haroon               61810                   # 
- #       - Isa David                  61871                   # 
- #       - Diogo Roque                61857                   # 
- ##############################################################
+##############################################################
+#         Autores:                Numero Aluno:              # 
+#       - Omeir Haroon               61810                   # 
+#       - Isa David                  61871                   # 
+#       - Diogo Roque                61857                   # 
+##############################################################
 
 JAVAC = javac
 JAVA = java
@@ -21,12 +21,23 @@ CLIENT_TRUSTSTORE_PASS = truststorepass
 CLIENT_KEYSTORE_PASS = clientkeypass
 SERVER_CERT_ALIAS = sperta-server
 CLIENT_CERT_ALIAS = sperta-client
-TLS_SERVER_HOSTNAME ?= localhost
-TLS_SERVER_IP ?= 127.0.0.1
+
+# Automatically fetch Hostname and IP
+TLS_SERVER_HOSTNAME ?= $(shell hostname)
+TLS_SERVER_IP ?= $(shell hostname -I | awk '{print $$1}')
+
+# Read the IP from the file if it exists (for Machine 2), otherwise use the local IP
+SAVED_IP := $(shell cat server_ip.txt 2>/dev/null)
+ifneq ($(SAVED_IP),)
+SERVER_HOST ?= $(SAVED_IP)
+else
+SERVER_HOST ?= $(TLS_SERVER_IP)
+endif
+
 SERVER_CERT_DNAME = CN=$(TLS_SERVER_HOSTNAME), OU=SC, O=FCUL, L=Lisbon, ST=Lisbon, C=PT
 SERVER_CERT_SAN = dns:$(TLS_SERVER_HOSTNAME),ip:$(TLS_SERVER_IP)
 SERVER_PORT ?= 2223
-SERVER_HOST ?= $(TLS_SERVER_HOSTNAME)
+
 SERVER_ARGS = $(SERVER_PORT) cipherpass serverkeystore.jks keystorepass
 CLIENT_CLASS = main.client.SpertaClient
 CLIENT_ARGS = $(SERVER_HOST):$(SERVER_PORT) clienttruststore.jks truststorepass clientkeystore.jks clientkeypass Nexus ehBueFixe
@@ -34,21 +45,19 @@ CLIENT_ARGS2 = $(SERVER_HOST):$(SERVER_PORT) clienttruststore.jks truststorepass
 CLIENT_WRONG_ARGS = $(SERVER_HOST):$(SERVER_PORT) clienttruststore.jks truststorepass clientkeystore.jks clientkeypass Nexus Eclipsew
 CLIENT_ARGS_NO_PORT = $(SERVER_HOST) clienttruststore.jks truststorepass clientkeystore.jks clientkeypass Nexus ehBueFixe
 
-
 compile:
 	@mkdir -p $(BIN_DIR)/main/server $(BIN_DIR)/main/client
 	@$(JAVAC) -d $(BIN_DIR) $(SRC_DIR)/main/server/*.java $(SRC_DIR)/main/client/*.java
 
-
 compile_client:
 	@$(JAVAC) -d $(BIN_DIR)  $(SRC_DIR)/main/client/*.java
-
 
 compile_server:
 	@$(JAVAC) -d $(BIN_DIR) $(SRC_DIR)/main/server/*.java 
 
 certs:
-	@rm -f $(SERVER_KEYSTORE) $(SERVER_CERT) $(CLIENT_TRUSTSTORE) $(CLIENT_KEYSTORE)
+	@rm -f $(SERVER_KEYSTORE) $(SERVER_CERT) $(CLIENT_TRUSTSTORE) $(CLIENT_KEYSTORE) server_ip.txt
+	@echo $(TLS_SERVER_IP) > server_ip.txt
 	@$(KEYTOOL) -genkeypair -alias $(SERVER_CERT_ALIAS) -keyalg RSA -keysize 2048 -validity 3650 -keystore $(SERVER_KEYSTORE) -storepass $(SERVER_KEYSTORE_PASS) -keypass $(SERVER_KEYSTORE_PASS) -dname "$(SERVER_CERT_DNAME)" -ext SAN=$(SERVER_CERT_SAN)
 	@$(KEYTOOL) -exportcert -alias $(SERVER_CERT_ALIAS) -keystore $(SERVER_KEYSTORE) -storepass $(SERVER_KEYSTORE_PASS) -rfc -file $(SERVER_CERT)
 	@$(KEYTOOL) -importcert -alias $(SERVER_CERT_ALIAS) -file $(SERVER_CERT) -keystore $(CLIENT_TRUSTSTORE) -storepass $(CLIENT_TRUSTSTORE_PASS) -noprompt
@@ -78,7 +87,6 @@ server_no_port: compile
 client_no_port: createClientJar
 	@$(JAVA) -jar $(DIST_DIR)/SpertaClient.jar $(CLIENT_ARGS_NO_PORT)
 
-
 re: clean compile
 
 createServerJAR: compile
@@ -91,13 +99,18 @@ createClientJar: compile
 
 createJARs: createServerJAR createClientJar
 
-
 serverJAR: createServerJAR
-	java -jar $(DIST_DIR)/SpertaServer.jar 22345 cipherpass serverkeystore.jks keystorepass
+	@echo "========================================================"
+	@echo "🚀 Starting Server..."
+	@echo "📡 Server IP Address: $(TLS_SERVER_IP)"
+	@echo "🔌 Server Port: $(SERVER_PORT)"
+	@echo "💻 Run this on Machine 2:"
+	@echo "java -jar SpertaClient.jar $(TLS_SERVER_IP):$(SERVER_PORT) clienttruststore.jks truststorepass clientkeystore.jks clientkeypass YourUser YourPass"
+	@echo "========================================================"
+	java -jar $(DIST_DIR)/SpertaServer.jar $(SERVER_PORT) cipherpass serverkeystore.jks keystorepass
 
 clientJAR: createClientJar
 	@echo "Uso: java -jar $(DIST_DIR)/SpertaClient.jar <IP/hostname>[:Port] <truststore> <password-truststore> <keystore> <password-keystore> <user-id> <password>"
-
 
 clean:
 	@rm -rf $(BIN_DIR)
@@ -106,4 +119,4 @@ clean:
 cleanFULL: clean
 	@rm -rf client_data
 	@rm -rf server_data
-	@rm -f $(SERVER_KEYSTORE) $(SERVER_CERT) $(CLIENT_TRUSTSTORE) $(CLIENT_KEYSTORE)
+	@rm -f $(SERVER_KEYSTORE) $(SERVER_CERT) $(CLIENT_TRUSTSTORE) $(CLIENT_KEYSTORE) server_ip.txt
