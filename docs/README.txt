@@ -1,198 +1,258 @@
-# Sperta - Projeto 1 (Fase 2)
+================================================================================
+  Sperta - Projeto 1, Fase 2
+  Seguranca e Confiabilidade 2025/2026
+================================================================================
 
-### **Grupo 4**
+Grupo 4
+  - Omeir Haroon   61810
+  - Isa David      61871
+  - Diogo Roque    61857
 
-| Aluno | Numero |
-|---|---:|
-| **Isa David** | `61871` |
-| **Omeir Haroon** | `61810` |
-| **Diogo Roque** | `61857` |
+--------------------------------------------------------------------------------
+OBJETIVO DA FASE 2
+--------------------------------------------------------------------------------
 
-Projeto da disciplina de Segurança e Confiabilidade (2025/2026).
+Esta fase adiciona seguranca ao sistema Sperta (casas inteligentes):
 
-Este trabalho implementa um sistema de casas inteligentes em arquitetura cliente-servidor sobre TLS/SSL:
-- `SpertaServer`: gere autenticação, permissões, estado e histórico dos dispositivos.
-- `SpertaClient`: autentica no servidor, envia comandos e recebe dados/ficheiros.
+  1. TLS/SSL (autenticacao unilateral do servidor) em todas as comunicacoes
+  2. Protecao de passwords com SHA-256 + salt (formato: user:hash:salt)
+  3. Atestacao remota do cliente com nonce + SHA-256(nonce || SpertaClient.jar)
+  4. Cifra dos ficheiros do servidor com PBE (PBKDF2 + AES-128-GCM)
+  5. Verificacao de integridade de todos os ficheiros (SHA-256, ficheiros .hash)
+  6. Confidencialidade fim-a-fim nos comandos EC/RT/RH (AES-128-GCM por seccao)
 
-O objetivo desta fase é focar funcionalidades e persistência.
+--------------------------------------------------------------------------------
+REQUISITOS
+--------------------------------------------------------------------------------
 
-## Arquitetura
+  - Java JDK 17 ou superior  (testado com OpenJDK 21)
+  - make
+  - keytool (incluido no JDK)
+  - Portos utilizados: 2223 (Makefile) | 22345 (default do codigo)
 
-- Linguagem: Java
-- Transporte: TLS/SSL sockets
-- Protocolo aplicacional: objetos Java para comandos/respostas + stream binária para transferência de ficheiros (`RT` e `RH`)
-- Multi-cliente: servidor aceita clientes em simultâneo (1 thread por cliente)
+--------------------------------------------------------------------------------
+SINTAXE DE EXECUCAO
+--------------------------------------------------------------------------------
 
-## Execução
+Servidor:
+  SpertaServer [port] <password-cifra> <keystore> <password-keystore>
 
-### Sintaxe esperada
+  Exemplo:
+    java -jar dist/SpertaServer.jar 2223 cipherpass serverkeystore.jks keystorepass
 
-- Servidor: `SpertaServer [port] <password-cifra> <keystore> <password-keystore>`
-- Cliente: `SpertaClient <serverAddress> <truststore> <password-truststore> <keystore> <password-keystore> <user-id> <password>`
+Cliente:
+  SpertaClient <serverAddress> <truststore> <password-truststore>
+               <keystore> <password-keystore> <user-id> <password>
 
-`serverAddress` aceita formato `<ip-ou-hostname>[:porto]`.
-Se o porto não for indicado, o servidor usa por omissão o porto `2223` (conforme configurado no `Makefile`).
+  Exemplo:
+    java -jar dist/SpertaClient.jar 127.0.0.1:2223 clienttruststore.jks truststorepass \
+         clientkeystore.jks clientkeypass Nexus ehBueFixe
 
-### Execução Local (Na mesma máquina)
+  serverAddress aceita formato <IP/hostname>[:Port].
+  Se o port for omitido, o cliente liga-se ao porto 22345.
 
-Para testar tudo rapidamente na mesma máquina, basta usar os comandos automáticos:
+--------------------------------------------------------------------------------
+COMPILAR O PROJETO (a partir do codigo-fonte)
+--------------------------------------------------------------------------------
 
-```bash
-make certs
-make serverJAR
-```
+  make certs        # Gera certificados TLS e guarda o IP em server_ip.txt
+  make createJARs   # Compila o codigo e cria dist/SpertaServer.jar e dist/SpertaClient.jar
 
-Noutro terminal (na mesma máquina):
-```bash
-make client
-```
+Os JARs pre-compilados ja estao disponiveis em dist/. Se nao for necessario
+recompilar, pode saltar o passo "make createJARs".
 
-### Execução em Duas Máquinas Diferentes
+AVISO: Recompilar o SpertaClient.jar gera um novo binario com hash diferente.
+O servidor usa SHA-256(nonce || SpertaClient.jar) para atestacao remota.
+Se o JAR do cliente usado for diferente do JAR em dist/ no servidor, a
+atestacao falha (NOK-ATTEST). Por isso, cliente e servidor devem sempre
+usar os JARs gerados na mesma compilacao.
 
-O `Makefile` está configurado para detetar o teu IP automaticamente e guardá-lo no ficheiro `server_ip.txt` para facilitar a conexão. O fluxo correto para não quebrar a **Atestação Remota** é o seguinte:
+--------------------------------------------------------------------------------
+EXECUCAO (MAQUINA UNICA - cenario mais comum)
+--------------------------------------------------------------------------------
 
-**1. Na Máquina 1 (Servidor):**
-```bash
-make certs
-make serverJAR
-```
-*(Nota: O comando `make serverJAR` vai imprimir no terminal o comando exato que deves usar no cliente).*
+Terminal 1 (Servidor):
+  make certs
+  make serverJAR
 
-**2. Transferência:**
-Copia a pasta inteira do projeto (ou pelo menos os ficheiros `dist/SpertaClient.jar`, `clienttruststore.jks`, `clientkeystore.jks` e `server_ip.txt`) para a Máquina 2.
+Terminal 2 (Cliente - Nexus):
+  make client
 
-**3. Na Máquina 2 (Cliente):**
-⚠️ **NÃO executes** `make client` na Máquina 2. O `Makefile` irá recompilar o código, gerando uma nova hash no `.jar` e causando falha na Atestação Remota.
-Em vez disso, executa o JAR diretamente. Como o IP foi guardado no `server_ip.txt`, podes usar:
+Terminal 3 (Cliente - Eclipse):
+  make client2
 
-```bash
-java -jar dist/SpertaClient.jar $(cat server_ip.txt):2223 clienttruststore.jks truststorepass clientkeystore.jks clientkeypass Nexus ehBueFixe
-```
+Terminal 4 (Cliente com password errada para testar):
+  make wrongclient
 
-### Resolução de Problemas com IP (Docker/VMs)
-Se o servidor tiver o Docker instalado, o `Makefile` pode detetar o IP virtual errado (ex: `172.17.x.x`). Podes forçar o IP correto da rede Wi-Fi/Ethernet ao gerar os certificados:
-```bash
-make certs TLS_SERVER_IP=<O_TEU_IP_REAL>
-```
+--------------------------------------------------------------------------------
+EXECUCAO EM DUAS MAQUINAS (lab / avaliacao)
+--------------------------------------------------------------------------------
 
----
+MAQUINA 1 (Servidor):
 
-### Alvos do Makefile (Auxiliares)
+  1. Gerar certificados com o IP correto da maquina:
+       make certs TLS_SERVER_IP=<IP_DA_MAQUINA_SERVIDOR>
 
-- `make certs`: Gera certificados e guarda o IP em `server_ip.txt`.
-- `make serverJAR`: Compila, cria o JAR do servidor, imprime o menu de IP e executa.
-- `make createJARs`: Gera apenas os JARs em `dist/`.
-- `make client2` / `make wrongclient`: Executa o cliente com utilizadores alternativos.
-- `make clean`: Limpa ficheiros `.class`.
-- `make cleanFULL`: Limpa tudo, incluindo dados persistentes e certificados.
+     Se o IP for detetado automaticamente mas errado (ex: Docker, VMs):
+       hostname -I       # ver IPs disponiveis
+       make certs TLS_SERVER_IP=<IP_CORRETO>
 
-## TLS e Atestação Remota
+  2. Compilar e iniciar o servidor:
+       make serverJAR
 
-O cliente valida o certificado do servidor com verificação de hostname/IP. O `Makefile` injeta automaticamente o IP da máquina no campo `Subject Alternative Name (SAN)` do certificado usando a variável `TLS_SERVER_IP`.
+     O terminal imprimira o comando exato para o cliente.
 
-**Fluxo de Autenticação e Atestação:**
-1. O servidor envia um nonce aleatório de 8 bytes ao cliente.
-2. O cliente localiza o `SpertaClient.jar` em execução, calcula `SHA-256(nonce || jar)` e devolve o digest.
-3. O servidor calcula localmente o mesmo digest sobre a sua cópia de referência do cliente (`server_data/auth/attestation.txt`).
-4. Se coincidir, o servidor responde `OK-ATTEST`; se não coincidir, responde `NOK-ATTEST` e a ligação termina.
-5. Autenticação por `user-id` e `password`:
-   - Novo utilizador: `OK-NEW-USER` (registado e envia certificado);
-   - Utilizador existente válido: `OK-USER`;
-   - Password errada: `WRONG-PWD`;
-   - Sessão duplicada: `USER-ALREADY-CONNECTED`.
+MAQUINA 2 (Cliente):
 
-## Comandos suportados
+  IMPORTANTE: NAO execute "make client" na Maquina 2.
+  Isso recompilaria o JAR, gerando um hash diferente e causando NOK-ATTEST.
 
-Comandos do enunciado implementados:
+  Em vez disso, copie da Maquina 1 os ficheiros:
+    dist/SpertaClient.jar
+    clienttruststore.jks
+    clientkeystore.jks
+    server_ip.txt   (opcional, contem o IP guardado automaticamente)
 
-- `CREATE <hm>`
-- `ADD <user1> <hm> <s>`
-- `RD <hm> <s>`
-- `EC <hm> <d> <int>`
-- `RT <hm>`
-- `RH <hm> <d>`
+  Depois execute diretamente:
+    java -jar dist/SpertaClient.jar <IP_SERVIDOR>:2223 \
+         clienttruststore.jks truststorepass \
+         clientkeystore.jks clientkeypass \
+         <user-id> <password>
 
-Comando extra implementado no projeto:
+  Usando o IP guardado em server_ip.txt:
+    java -jar dist/SpertaClient.jar $(cat server_ip.txt):2223 \
+         clienttruststore.jks truststorepass \
+         clientkeystore.jks clientkeypass Nexus ehBueFixe
 
-- `LS` ou `LS <hm>`
+  Utilizadores pre-configurados no Makefile:
+    Nexus     / ehBueFixe   (make client)
+    Eclipse   / tbmEhFixe     (make client2)
 
-Cliente também aceita:
+--------------------------------------------------------------------------------
+EXECUCAO MANUAL (sem Makefile, ex: nos labs da faculdade)
+--------------------------------------------------------------------------------
 
-- `EXIT` / `QUIT` para terminar.
+Passo 1 - Gerar certificados (apenas uma vez por sessao):
+  keytool -genkeypair -alias sperta-server -keyalg RSA -keysize 2048 \
+    -validity 3650 -keystore serverkeystore.jks -storepass keystorepass \
+    -keypass keystorepass \
+    -dname "CN=$(hostname), OU=SC, O=FCUL, L=Lisbon, ST=Lisbon, C=PT" \
+    -ext SAN=dns:$(hostname),ip:$(hostname -I | awk '{print $1}')
 
-## Respostas por comando (comportamento atual)
+  keytool -exportcert -alias sperta-server -keystore serverkeystore.jks \
+    -storepass keystorepass -rfc -file server-cert.pem
 
-### `CREATE <hm>`
-- `OK`: casa criada, utilizador passa a owner.
-- `NOK`: casa já existe ou erro de persistência.
+  keytool -importcert -alias sperta-server -file server-cert.pem \
+    -keystore clienttruststore.jks -storepass truststorepass -noprompt
 
-### `ADD <user1> <hm> <s>`
-- `OK`
-- `NOHM`: casa inexistente.
-- `NOUSER`: utilizador alvo não existe.
-- `NOPERM`: quem executa não é owner da casa.
-- `NOK`: secção inválida/inexistente na casa no momento do pedido.
+  keytool -genkeypair -alias sperta-client -keyalg RSA -keysize 2048 \
+    -validity 3650 -keystore clientkeystore.jks -storepass clientkeypass \
+    -keypass clientkeypass \
+    -dname "CN=client-default, OU=SC, O=FCUL, L=Lisbon, ST=Lisbon, C=PT"
 
-### `RD <hm> <s>`
-- `OK`
-- `NOHM` / `NOPERM` / `NOK`: secção inválida.
-Ao registar dispositivo, o servidor cria IDs automaticamente por secção (`M1`, `M2`, `L1`, ...).
+Passo 2 - Iniciar o servidor:
+  java -jar dist/SpertaServer.jar 2223 cipherpass serverkeystore.jks keystorepass
 
-### `EC <hm> <d> <int>`
-- `OK`
-- `NOK`: valor inválido (não inteiro ou fora de `0..600`).
-- `NOHM` / `NOD` / `NOPERM`
-Observação: o valor é cifrado no cliente e apenas o payload cifrado é enviado para o servidor.
+Passo 3 - Conectar o cliente (noutro terminal):
+  java -jar dist/SpertaClient.jar 127.0.0.1:2223 \
+       clienttruststore.jks truststorepass \
+       clientkeystore.jks clientkeypass \
+       Nexus ehBueFixe
 
-### `RT <hm>`
-- `OK` + envio de ficheiro texto com estado atual dos dispositivos acessíveis (cifrado e decifrado localmente no cliente).
-- `NOHM` / `NOPERM` / `NODATA`
-No cliente, guardado em: `client_data/<user-id>/status_<hm>.txt`
+  Para outro utilizador:
+  java -jar dist/SpertaClient.jar 127.0.0.1:2223 \
+       clienttruststore.jks truststorepass \
+       clientkeystore.jks clientkeypass \
+       Eclipse tbmEhFixe
 
-### `RH <hm> <d>`
-- `OK` + envio do ficheiro CSV de histórico do dispositivo (cifrado e decifrado localmente no cliente).
-- `NOHM` / `NOD` / `NOPERM` / `NODATA`
-No cliente, guardado em: `client_data/<user-id>/history_<d>_<hm>.csv`
+Nota: nos labs da FCUL, se o "make" nao estiver disponivel, use os comandos
+manuais acima. O Java e o keytool devem estar no PATH por defeito.
+Para verificar: java -version  e  keytool -help
 
-### `LS` e `LS <hm>` (extra)
-- `LS`: lista casas onde o utilizador tem acesso.
-- `LS <hm>`: lista os dispositivos acessíveis dessa casa.
-Observação: O comando não revela valores em claro. Para obter estados legíveis, usar `RT <hm>`.
+--------------------------------------------------------------------------------
+COMANDOS SUPORTADOS
+--------------------------------------------------------------------------------
 
-## Persistência
+  CREATE <hm>             Criar casa <hm> (utilizador fica Owner)
+  ADD <user> <hm> <s>     Adicionar utilizador a casa <hm>, seccao <s>
+                          <s> pode ser M, G, L, P, B, E, ou "all"
+  RD <hm> <s>             Registar dispositivo na seccao <s> da casa <hm>
+  EC <hm> <d> <int>       Enviar estado/temporizacao [0..600] ao dispositivo <d>
+                          (valor cifrado fim-a-fim com a chave da seccao)
+  RT <hm>                 Receber estado atual dos dispositivos (decifrado localmente)
+  RH <hm> <d>             Receber historico CSV do dispositivo <d> (decifrado localmente)
+  LS [<hm>]               Listar casas acessiveis (ou dispositivos de <hm>)
+  EXIT / QUIT             Desligar
 
-O servidor cria/usa a seguinte estrutura:
+Respostas do servidor:
+  OK         Operacao bem-sucedida
+  NOK        Erro generico
+  NOHM       Casa nao existe
+  NOPERM     Sem permissoes
+  NOUSER     Utilizador nao existe
+  NOD        Dispositivo nao existe
+  NODATA     Sem dados disponiveis
 
-```text
-server_data/
-  auth/
-    users.txt
-    attestation.txt
-    certs/
-  metadata/
-    homes_registry.txt
-    permissions.txt
-    house_metadata.txt
-    section_counters.txt
-    device_sections.txt
-    houses.log
-  states/
-    last_commands.txt
-  keys/
-    <house>/
-      <section>/
-        key.<house>.<section>.<owner>.<recipient>.bin
-  homes/
-    <house>/
-      <section>/
-        <device>.csv
-```
+--------------------------------------------------------------------------------
+FLUXO DE AUTENTICACAO E ATESTACAO
+--------------------------------------------------------------------------------
 
-O cliente guarda:
+  1. Cliente liga ao servidor via TLS (servidor autenticado pelo certificado)
+  2. Servidor envia nonce aleatorio (8 bytes)
+  3. Cliente calcula SHA-256(nonce || SpertaClient.jar) e envia ao servidor
+  4. Servidor verifica comparando com SHA-256(nonce || dist/SpertaClient.jar)
+     - OK-ATTEST  : atestacao bem-sucedida, prossegue para autenticacao
+     - NOK-ATTEST : cliente invalido, ligacao encerrada
+  5. Cliente envia user-id e password
+     - OK-NEW-USER : novo utilizador registado, cliente envia certificado X.509
+     - OK-USER     : utilizador existente autenticado
+     - WRONG-PWD   : password incorreta (1 retry permitido)
+     - USER-ALREADY-CONNECTED : sessao duplicada rejeitada
 
-```text
-client_data/
-  <user-id>/
-    status_<hm>.txt
-    history_<d>_<hm>.csv
-```
+--------------------------------------------------------------------------------
+ESTRUTURA DE PERSISTENCIA (servidor)
+--------------------------------------------------------------------------------
+
+  server_data/
+    auth/
+      users.txt            utilizadores (cifrado + hash)
+      attestation.txt      caminho para o JAR de referencia do cliente (cifrado)
+      pbe.salt             sal para derivacao da chave PBE
+      certs/               certificados X.509 dos utilizadores (.cer)
+    metadata/
+      homes_registry.txt   casas e owners (cifrado + hash)
+      permissions.txt      permissoes por casa/utilizador (cifrado + hash)
+      house_metadata.txt   metadados das casas (cifrado + hash)
+      section_counters.txt contadores de IDs por seccao (cifrado + hash)
+      device_sections.txt  mapeamento dispositivo -> seccao (cifrado + hash)
+      houses.log           log de auditoria (cifrado + hash)
+    states/
+      last_commands.txt    ultimo comando EC por dispositivo (cifrado + hash)
+    homes/
+      <casa>/<seccao>/     historico CSV por dispositivo (cifrado + hash)
+    keys/
+      <casa>/<seccao>/     chaves de seccao cifradas por utilizador (.bin + hash)
+
+  client_data/ (gerado no lado do cliente)
+    <user-id>/
+      status_<hm>.txt      resultado decifrado do RT
+      history_<d>_<hm>.csv resultado decifrado do RH
+
+Todos os ficheiros protegidos sao cifrados com AES-128-GCM usando uma chave
+derivada por PBKDF2(password-cifra, salt) e tem um ficheiro .hash associado
+com o SHA-256 do conteudo em texto simples.
+
+--------------------------------------------------------------------------------
+LIMITA??ES CONHECIDAS
+--------------------------------------------------------------------------------
+
+  - O formato de hash/salt de passwords esta em hexadecimal (nao Base64 como
+    no exemplo do enunciado). O funcionamento esta correto.
+  - O comando LS e extra ao enunciado e mantido por conveniencia.
+  - Para testes em duas maquinas, o SpertaClient.jar do cliente deve ser o
+    mesmo (mesmo binario) que esta em dist/ no servidor para a atestacao passar.
+  - O servidor so aceita utilizadores que ja tenham feito login pelo menos uma
+    vez antes de serem adicionados a uma casa com ADD (necessario para o
+    certificado existir no servidor para partilha de chaves).
+
+================================================================================

@@ -189,7 +189,7 @@ public class SpertaClient {
                 return false;
             }
             try (FileInputStream fis = new FileInputStream(trustPath.toFile())) {
-                trustStore = KeyStore.getInstance("JKS");
+                trustStore = KeyStore.getInstance(KeyStore.getDefaultType());
                 trustStore.load(fis, password.toCharArray()); // NOSONAR - password provided by local operator for truststore unlock
             }
             trustStorePath = trustPath.toString();
@@ -222,11 +222,7 @@ public class SpertaClient {
         }
 
         if ("OK-USER".equals(authResponse)) {
-            Certificate cert = fetchCertificateFromServer(userId);
-            if (cert == null) {
-                System.err.println("Erro ao obter certificado do utilizador autenticado: " + userId);
-                return false;
-            }
+            fetchCertificateFromServer(userId); // best-effort pre-load into truststore
             return true;
         }
 
@@ -344,9 +340,18 @@ public class SpertaClient {
                 if ("OK".equals(response) && "ADD".equals(commandName) && parts.length == 4) {
                     String targetUser = parts[1];
                     String house = parts[2];
-                    String section = normalizeSectionName(parts[3]);
-                    if (section != null && !shareSectionKeyWithUser(house, section, userId, targetUser)) {
-                        System.out.println("Aviso: falha ao partilhar chave de secao para o utilizador adicionado.");
+                    String sectionArg = parts[3].trim().toUpperCase();
+                    if ("ALL".equals(sectionArg)) {
+                        for (String s : HOUSE_SECTIONS) {
+                            if (!shareSectionKeyWithUser(house, s, userId, targetUser)) {
+                                System.out.println("Aviso: falha ao partilhar chave de secao " + s + " para o utilizador adicionado.");
+                            }
+                        }
+                    } else {
+                        String section = normalizeSectionName(sectionArg);
+                        if (section != null && !shareSectionKeyWithUser(house, section, userId, targetUser)) {
+                            System.out.println("Aviso: falha ao partilhar chave de secao para o utilizador adicionado.");
+                        }
                     }
                 }
             }
