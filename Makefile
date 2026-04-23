@@ -38,14 +38,10 @@ CLIENT_ARGS_NO_PORT = $(SERVER_HOST) clienttruststore.jks truststorepass clientk
 compile:
 	@mkdir -p $(BIN_DIR)/main/server $(BIN_DIR)/main/client
 	@$(JAVAC) -d $(BIN_DIR) $(SRC_DIR)/main/server/*.java $(SRC_DIR)/main/client/*.java
-	@mkdir -p server_data/auth
-	@printf 'dist/SpertaClient.jar\n' > server_data/auth/attestation.txt
 
 
 compile_client:
 	@$(JAVAC) -d $(BIN_DIR)  $(SRC_DIR)/main/client/*.java
-	@mkdir -p server_data/auth
-	@printf 'dist/SpertaClient.jar\n' > server_data/auth/attestation.txt
 
 
 compile_server:

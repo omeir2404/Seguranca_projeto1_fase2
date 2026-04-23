@@ -388,6 +388,12 @@ public class ServerFileManager {
             Path hashPath = filePath.resolveSibling(filePath.getFileName().toString() + HASH_EXTENSION);
             if (!Files.exists(hashPath) && Files.size(filePath) == 0L) {
                 writeProtectedFile(filePath, "");
+            } else if (!Files.exists(hashPath)
+                    && filePath.getFileName().toString().equals(ATTESTATION_FILENAME)) {
+                // One-time migration path: convert existing plaintext attestation file into
+                // protected format with a matching hash so startup integrity checks can run.
+                String content = Files.readString(filePath, StandardCharsets.UTF_8);
+                writeProtectedFile(filePath, content);
             }
         }
     }
@@ -606,21 +612,19 @@ public Map<String, String> loadHouses() {
                 return;
             }
 
-            String firstLine;
-            try (BufferedReader reader = Files.newBufferedReader(logPath)) {
-                firstLine = reader.readLine();
-            }
-
-            if (firstLine == null) {
-                Files.writeString(logPath, LOG_HEADER + System.lineSeparator());
+            String content = readProtectedFile(logPath);
+            if (content.isBlank()) {
+                writeProtectedFile(logPath, LOG_HEADER + System.lineSeparator());
                 return;
             }
 
+            String[] lines = content.split("\\r?\\n", -1);
+            String firstLine = lines.length == 0 ? null : lines[0];
+
             if (!LOG_HEADER.equalsIgnoreCase(firstLine)) {
-                String content = Files.readString(logPath);
-                Files.writeString(logPath, LOG_HEADER + System.lineSeparator() + content);
+                writeProtectedFile(logPath, LOG_HEADER + System.lineSeparator() + content);
             }
-        } catch (IOException e) {
+        } catch (Exception e) {
             System.err.println("Erro ao normalizar cabeçalho do log " + logPath + ": " + e.getMessage());
         }
     }
@@ -631,9 +635,14 @@ public Map<String, String> loadHouses() {
      */
     private int readLastDeviceValue(Path logPath, String expectedHouse, String expectedDevice) {
         int lastValue = 0;
-        try (BufferedReader reader = Files.newBufferedReader(logPath)) {
-            String line;
-            while ((line = reader.readLine()) != null) {
+        try {
+            String content = readProtectedFile(logPath);
+            if (content.isBlank()) {
+                return lastValue;
+            }
+
+            String[] lines = content.split("\\r?\\n");
+            for (String line : lines) {
                 line = line.trim();
                 if (line.isEmpty() || line.startsWith("time;")) { 
                     continue; 
@@ -659,7 +668,7 @@ public Map<String, String> loadHouses() {
                     }
                 }
             }
-        } catch (IOException e) {
+        } catch (Exception e) {
             System.err.println("Aviso ao ler log de dispositivo " + logPath + ": " + e.getMessage());
         }
         return lastValue;
