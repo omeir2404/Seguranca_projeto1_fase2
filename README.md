@@ -1,4 +1,4 @@
-# Sperta - Projeto 1 (Fase 1)
+# Sperta - Projeto 1 (Fase 2)
 
 ### **Grupo 4**
 
@@ -14,7 +14,7 @@ Este trabalho implementa um sistema de casas inteligentes em arquitetura cliente
 - `SpertaServer`: gere autenticação, permissões, estado e histórico dos dispositivos.
 - `SpertaClient`: autentica no servidor, envia comandos e recebe dados/ficheiros.
 
-O objetivo desta fase é focar funcionalidades e persistência.
+O objetivo desta fase (Fase 2) é garantir propriedades de seguranca e confiabilidade: TLS, atestacao remota, integridade de dados em repouso e confidencialidade fim-a-fim.
 
 ## Arquitetura
 
@@ -31,7 +31,14 @@ O objetivo desta fase é focar funcionalidades e persistência.
 - Cliente: `SpertaClient <serverAddress> <truststore> <password-truststore> <keystore> <password-keystore> <user-id> <password>`
 
 `serverAddress` aceita formato `<ip-ou-hostname>[:porto]`.
-Se o porto não for indicado, o servidor usa por omissão o porto `2223` (conforme configurado no `Makefile`).
+Se o porto nao for indicado no arranque manual (sem argumentos de porta), o codigo usa por omissao `22345`.
+Nos alvos do `Makefile` (`make serverJAR`, `make client`), o porto usado por defeito e `2223` porque esse valor e passado explicitamente nos comandos do `Makefile`.
+
+### Requisitos
+
+- Java JDK 17+ (com `javac`, `java` e `jar` no `PATH`)
+- `keytool` disponivel (normalmente incluido no JDK)
+- `make`
 
 ### Execução Local (Na mesma máquina)
 
@@ -85,6 +92,32 @@ make certs TLS_SERVER_IP=<O_TEU_IP_REAL>
 - `make client2` / `make wrongclient`: Executa o cliente com utilizadores alternativos.
 - `make clean`: Limpa ficheiros `.class`.
 - `make cleanFULL`: Limpa tudo, incluindo dados persistentes e certificados.
+
+### Execucao Manual (sem Makefile)
+
+Servidor (porto explicito):
+
+```bash
+java -cp bin main.server.SpertaServer 2223 cipherpass serverkeystore.jks keystorepass
+```
+
+Servidor (porto omitido -> default do codigo):
+
+```bash
+java -cp bin main.server.SpertaServer cipherpass serverkeystore.jks keystorepass
+```
+
+Cliente (porta explicita no serverAddress):
+
+```bash
+java -cp bin main.client.SpertaClient 127.0.0.1:2223 clienttruststore.jks truststorepass clientkeystore.jks clientkeypass Nexus ehBueFixe
+```
+
+Cliente (porta omitida no serverAddress -> default do codigo):
+
+```bash
+java -cp bin main.client.SpertaClient 127.0.0.1 clienttruststore.jks truststorepass clientkeystore.jks clientkeypass Nexus ehBueFixe
+```
 
 ## TLS e Atestação Remota
 
@@ -196,3 +229,16 @@ client_data/
     status_<hm>.txt
     history_<d>_<hm>.csv
 ```
+
+## Integridade de Ficheiros
+
+- Cada ficheiro protegido tem um ficheiro associado `.hash`.
+- A verificacao de integridade e feita no arranque do servidor sobre os ficheiros em `server_data`.
+- Em caso de falha de integridade (ou password de cifra incorreta que torne os dados indecifraveis), o servidor termina com `NOK-INTEGRITY`.
+
+## Limitacoes Conhecidas
+
+- O formato de hash/salt de passwords esta em hexadecimal (nao Base64).
+- O comando `LS` e extra ao enunciado e mantido por conveniencia de uso.
+- Para testes em duas maquinas, executar `make client` na maquina remota pode invalidar a atestacao se gerar um JAR diferente; preferir executar o JAR transferido diretamente.
+- O rebuild de estado em arranque depende dos registos persistidos e pode requerer validacao adicional em cenarios de migracao entre formatos antigos/novos.
