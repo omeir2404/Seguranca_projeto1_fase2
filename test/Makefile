@@ -41,7 +41,7 @@ SERVER_PORT ?= 2223
 SERVER_ARGS = $(SERVER_PORT) cipherpass serverkeystore.jks keystorepass
 CLIENT_CLASS = main.client.SpertaClient
 CLIENT_ARGS = $(SERVER_HOST):$(SERVER_PORT) clienttruststore.jks truststorepass clientkeystore.jks clientkeypass Nexus ehBueFixe
-CLIENT_ARGS2 = $(SERVER_HOST):$(SERVER_PORT) clienttruststore.jks truststorepass clientkeystore.jks clientkeypass Eclipse ATuaMae
+CLIENT_ARGS2 = $(SERVER_HOST):$(SERVER_PORT) clienttruststore.jks truststorepass clientkeystore.jks clientkeypass Eclipse tbmEhFixe
 CLIENT_WRONG_ARGS = $(SERVER_HOST):$(SERVER_PORT) clienttruststore.jks truststorepass clientkeystore.jks clientkeypass Nexus Eclipsew
 CLIENT_ARGS_NO_PORT = $(SERVER_HOST) clienttruststore.jks truststorepass clientkeystore.jks clientkeypass Nexus ehBueFixe
 
@@ -99,13 +99,13 @@ createClientJar: compile
 
 createJARs: createServerJAR createClientJar
 
-serverJAR: createServerJAR
+serverJAR: createJARs
 	@echo "========================================================"
-	@echo "🚀 Starting Server..."
-	@echo "📡 Server IP Address: $(TLS_SERVER_IP)"
-	@echo "🔌 Server Port: $(SERVER_PORT)"
-	@echo "💻 Run this on Machine 2:"
-	@echo "java -jar SpertaClient.jar $(TLS_SERVER_IP):$(SERVER_PORT) clienttruststore.jks truststorepass clientkeystore.jks clientkeypass YourUser YourPass"
+	@echo "Starting Server..."
+	@echo "Server IP Address: $(TLS_SERVER_IP)"
+	@echo "Server Port: $(SERVER_PORT)"
+	@echo "Run this on Machine 2:"
+	@echo "java -jar dist/SpertaClient.jar $(TLS_SERVER_IP):$(SERVER_PORT) clienttruststore.jks truststorepass clientkeystore.jks clientkeypass YourUser YourPass"
 	@echo "========================================================"
 	java -jar $(DIST_DIR)/SpertaServer.jar $(SERVER_PORT) cipherpass serverkeystore.jks keystorepass
 
