@@ -111,6 +111,18 @@ public class ServerFileManager {
         ensurePersistenceDirectories();
     }
 
+    /*
+     * Encrypted file layout (written by writeProtectedFile):
+     * - 4 bytes: MAGIC_HEADER ("SPRT") to identify protected files
+     * - 1 byte : version (currently 1)
+     * - 1 byte : IV length (typically 12)
+     * - N bytes: IV
+     * - remaining bytes: AES-GCM ciphertext (ciphertext includes authentication tag)
+     *
+     * A separate "<filename>.hash" file contains the SHA-256 of the plaintext
+     * (in hexadecimal) and is used to detect tampering or incomplete writes.
+     */
+
     public static String generateHashFromString(String content) throws Exception {
         return generateHashFromBytes(content.getBytes(StandardCharsets.UTF_8));
     }
@@ -138,10 +150,16 @@ public class ServerFileManager {
                 new SecureRandom().nextBytes(salt);
                 Files.write(saltPath, salt);
             }
-
+            // Deriva uma chave a partir da password mestra usando PBKDF2-HMAC-SHA256.
+            // Parâmetros escolhidos:
+            // - Iterations: 150000 (balance entre CPU cost e usabilidade)
+            // - Key length: 128 bits (AES-128)
+            // O salt é persistido em server_data/auth/pbe.salt para permitir a
+            // derivação da mesma chave em arrancos subsequentes.
             SecretKeyFactory skf = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256");
             PBEKeySpec spec = new PBEKeySpec(password.toCharArray(), salt, 150_000, 128);
             byte[] keyBytes = skf.generateSecret(spec).getEncoded();
+            // Master key para cifragem AES-GCM usada por writeProtectedFile/readProtectedFile
             this.masterKey = new SecretKeySpec(keyBytes, "AES");
             
         } catch (Exception e) {
@@ -151,24 +169,37 @@ public class ServerFileManager {
     }
 
     public void writeProtectedFile(Path path, String content) throws Exception {
+        // Cria um IV (nonce) único para esta cifragem. AES-GCM requer um IV
+        // não-repetido com a mesma chave para garantir segurança.
         Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
         byte[] iv = new byte[GCM_IV_LENGTH];
         new SecureRandom().nextBytes(iv);
-        
+
+        // Inicializa o cipher em modo ENCRYPT com a masterKey derivada
+        // previamente por initCrypto(). O GCMParameterSpec inclui o tamanho da tag.
         cipher.init(Cipher.ENCRYPT_MODE, masterKey, new GCMParameterSpec(GCM_TAG_LENGTH, iv));
         byte[] ciphertext = cipher.doFinal(content.getBytes(StandardCharsets.UTF_8));
-        
+
+        /*
+         * Escreve o ficheiro protegido com o seguinte formato:
+         * [MAGIC_HEADER (4 bytes)] [version (1 byte)] [ivLength (1 byte)] [iv (N bytes)] [ciphertext (...)]
+         * Separámos o hash do plaintext para um ficheiro ".hash" paralelo, de forma a
+         * permitir deteção de corrupção/tampering antes de tentar decifrar (ou como
+         * forma simples de validar ficheiros binários como certificados).
+         */
         try (DataOutputStream dos = new DataOutputStream(Files.newOutputStream(path))) {
             dos.write(MAGIC_HEADER);
-            dos.writeByte(1); // Version
+            dos.writeByte(1); // Versão do formato
             dos.writeByte(iv.length);
             dos.write(iv);
             dos.write(ciphertext);
         }
+
+        // Calcula e grava o hash do plaintext para validação de integridade.
         String hash = generateHashFromString(content);
         Path hashPath = path.resolveSibling(path.getFileName().toString() + ".hash");
-        Files.writeString(hashPath, hash + System.lineSeparator(), 
-            StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+        Files.writeString(hashPath, hash + System.lineSeparator(),
+                StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
     }
     
 
@@ -201,7 +232,16 @@ public class ServerFileManager {
         return new String(fileData, StandardCharsets.UTF_8);
     }
 
-    // Generates the SHA-256 hash for a single file and returns it in hexadecimal format.
+
+    /**
+     * Gera o SHA-256 para um ficheiro (binário ou texto) e devolve em hexadecimal.
+     * Utilizado para criar o ficheiro ".hash" que acompanha ficheiros protegidos
+     * e certificados binários. Lê o ficheiro em blocos para suportar ficheiros grandes.
+     *
+     * @param path Caminho para o ficheiro a hashear
+     * @return String hexadecimal lowercase com o digest SHA-256
+     * @throws Exception em caso de I/O ou falha no MessageDigest
+     */
     public static String generateHashFile(Path path) throws Exception {
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
         try (InputStream input = Files.newInputStream(path)) {
@@ -259,6 +299,11 @@ public class ServerFileManager {
         }
     }
 
+    /**
+     * Verifica a integridade de um ficheiro textual/criptografado comparando
+     * o hash calculado do plaintext com o hash guardado em <file>.hash.
+     * Em caso de diferença, termina a execução com failIntegrity().
+     */
     public void verifyBinaryIntegrity(Path filePath) {
         try {
             if (!Files.exists(filePath)) {
@@ -397,6 +442,7 @@ public class ServerFileManager {
             }
         }
     }
+
 
 
     // ============ FILE LOADING METHODS ============
@@ -792,6 +838,7 @@ public Map<String, String> loadHouses() {
             return null;
         }
     }
+
 
     private String sanitizeToken(String token) {
         if (token == null || token.isBlank()) {

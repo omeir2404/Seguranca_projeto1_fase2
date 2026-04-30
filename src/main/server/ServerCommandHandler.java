@@ -15,12 +15,19 @@ import java.time.format.DateTimeFormatter;
 import java.util.*;
 
 public class ServerCommandHandler {
-    
+    // =============================================================
+    // Estado partilhado do servidor
+    // =============================================================
+    // users: lista de utilizadores registados e respetivo estado interno.
     private Map<String, String> users;
+    // houses: mapa casa -> owner.
     private Map<String, String> houses;
+    // permissions: mapa casa -> (utilizador -> secao(s) permitidas).
     private Map<String, Map<String, String>> permissions;
+    // deviceState: estado atual de cada dispositivo por casa.
     private Map<String, Map<String, Integer>> deviceState;
 
+    // Ficheiros persistentes encriptados/protegidos com metadados do sistema.
     private static String HOUSES_FILE = "server_data/metadata/homes_registry.txt";
 	private static String PERMISSIONS_FILE = "server_data/metadata/permissions.txt";
     private static String HOUSE_METADATA_FILE = "server_data/metadata/house_metadata.txt";
@@ -31,10 +38,18 @@ public class ServerCommandHandler {
     private static final String LOGS_HEADER = "time; command";
     private static final DateTimeFormatter TS_FORMAT = DateTimeFormatter.ISO_LOCAL_DATE_TIME;
     private static final Set<String> ALLOWED_SECTIONS = Set.of("M", "G", "L", "P", "B", "E");
+        // Canal de rede do servidor para enviar respostas e ficheiros ao cliente.
     private ServerNetwork serverNetwork;
 
+        // Abstração de acesso a ficheiros protegidos, cifrados e assinados.
     private ServerFileManager fileManager;
 
+        /**
+         * Construtor.
+         *
+         * Recebe as estruturas em memória do servidor e inicializa os caminhos
+         * para os ficheiros de persistência com base na diretoria de execução.
+         */
     public ServerCommandHandler(Map<String, String> users, Map<String, String> houses, Map<String, Map<String, String>> permissions, Map<String, Map<String, Integer>> deviceState, ServerNetwork serverNetwork, ServerFileManager fileManager) {        Path current = Paths.get(System.getProperty("user.dir")).toAbsolutePath().normalize();
 		Path projectRoot = current;
         this.users = users;
@@ -54,6 +69,12 @@ public class ServerCommandHandler {
         this.fileManager = fileManager;
     }
 
+    /**
+     * Lê um ficheiro protegido e devolve as linhas em memória.
+     *
+     * Este método centraliza o acesso a ficheiros encriptados para não repetir
+     * a lógica de criação de diretórios e tratamento de erro.
+     */
     private List<String> readLines(String filePath) {
         try {
             ensureParentDir(filePath);
@@ -66,6 +87,12 @@ public class ServerCommandHandler {
         }
     }
 
+    /**
+     * Escreve um conjunto de linhas num ficheiro protegido.
+     *
+     * O conteúdo é reconstruído como texto antes de ser guardado pelo
+     * ServerFileManager.
+     */
     private void writeLines(String filePath, List<String> lines) {
         try {
             ensureParentDir(filePath);
@@ -76,6 +103,12 @@ public class ServerCommandHandler {
         }
     }
 
+    /**
+     * Calcula onde deve ficar o CSV do histórico de um dispositivo.
+     *
+     * A secção é obtida primeiro do mapeamento persistido; se não existir,
+     * usa-se a secção inferida do nome do dispositivo.
+     */
     private Path getDeviceLogPath(String house, String device) {
         String section = getStoredDeviceSection(house, device);
         if (section == null || section.isBlank()) {
@@ -87,6 +120,12 @@ public class ServerCommandHandler {
         return Paths.get(LOG_DIR, house, section, device + ".csv");
     }
 
+    /**
+     * Persiste o mapeamento casa:dispositivo:secao.
+     *
+     * Isto permite recuperar mais tarde a secção real de um dispositivo,
+     * em vez de depender apenas da primeira letra do nome.
+     */
     private synchronized void persistDeviceSection(String house, String device, String sectionName) {
         try {
             ensureFileHeader(DEVICE_SECTIONS_FILE, "House:Device:Section");
@@ -122,6 +161,9 @@ public class ServerCommandHandler {
         }
     }
 
+    /**
+     * Lê do ficheiro o mapeamento persistido da secção de um dispositivo.
+     */
     private synchronized String getStoredDeviceSection(String house, String device) {
         try {
             Path mappingPath = Paths.get(DEVICE_SECTIONS_FILE).toAbsolutePath().normalize();
@@ -151,6 +193,11 @@ public class ServerCommandHandler {
         return null;
     }
 
+    /**
+     * Atualiza o log CSV do dispositivo com o novo comando recebido.
+     *
+     * O objetivo é manter histórico cronológico de ações por dispositivo.
+     */
     private void updateDeviceLogs(String command, String house, String device){
         try {
             Path logPath = getDeviceLogPath(house, device);
@@ -164,6 +211,9 @@ public class ServerCommandHandler {
 
     }
 
+    /**
+     * Garante que o diretório pai do ficheiro existe.
+     */
     private void ensureParentDir(String filePath) throws IOException {
         Path path = Paths.get(filePath).toAbsolutePath().normalize();
         Path parent = path.getParent();
@@ -171,6 +221,10 @@ public class ServerCommandHandler {
             Files.createDirectories(parent);
         }
     }
+
+    /**
+     * Garante que um ficheiro começa com o cabeçalho esperado.
+     */
     private void ensureFileHeader(String filePath, String header) throws IOException {
         List<String> lines = readLines(filePath);
         if (lines.isEmpty() || lines.get(0).trim().isEmpty()) {
@@ -180,6 +234,9 @@ public class ServerCommandHandler {
         }
     }
 
+    /**
+     * Garante que o cabeçalho do log fica na primeira linha.
+     */
     private void ensureLogHeaderAtTop(Path logPath, String header) throws IOException {
         List<String> lines = readLines(logPath.toString());
         if (lines.isEmpty()) {
@@ -191,12 +248,18 @@ public class ServerCommandHandler {
         }
     }
 
+    /**
+     * Acrescenta uma linha a um ficheiro baseado em texto.
+     */
     private void appendLine(String filePath, String line) throws IOException {
         List<String> lines = readLines(filePath);
         lines.add(line);
         writeLines(filePath, lines);
     }
 
+    /**
+     * Persiste o snapshot completo do mapa de permissões no ficheiro protegido.
+     */
     private synchronized boolean persistPermissionsSnapshot() {
         try {
             ensureParentDir(PERMISSIONS_FILE);
@@ -240,6 +303,11 @@ public class ServerCommandHandler {
         }
     }
 
+    /**
+     * Inicializa os contadores de dispositivos por secção.
+     *
+     * Cada nova casa começa com A1/B1/... conforme a secção correspondente.
+     */
     private Map<String, Integer> initialSectionCounters() {
         Map<String, Integer> counters = new LinkedHashMap<>();
         counters.put("M", 1);
@@ -251,6 +319,9 @@ public class ServerCommandHandler {
         return counters;
     }
 
+    /**
+     * Serializa os contadores numa string do tipo M=1,G=1,...
+     */
     private String countersToString(Map<String, Integer> counters) {
         StringBuilder sb = new StringBuilder();
         for (Map.Entry<String, Integer> entry : counters.entrySet()) {
@@ -262,6 +333,9 @@ public class ServerCommandHandler {
         return sb.toString();
     }
 
+    /**
+     * Interpreta a string persistida dos contadores e reconstrói o mapa.
+     */
     private Map<String, Integer> parseCounters(String countersStr) {
         Map<String, Integer> counters = initialSectionCounters();
         if (countersStr == null || countersStr.isBlank()) {
@@ -292,6 +366,11 @@ public class ServerCommandHandler {
         return counters;
     }
 
+    /**
+     * Reserva o próximo nome livre para um dispositivo de uma secção.
+     *
+     * Exemplo: M1, M2, M3... ou P1, P2, ...
+     */
     private synchronized String allocateNextDeviceName(String house, String sectionLetter) {
         try {
             ensureFileHeader(COUNTERS_FILE, "House:Section=NextCounter");
@@ -338,6 +417,10 @@ public class ServerCommandHandler {
         }
     }
 
+    /**
+     * Regista uma nova casa nos ficheiros de persistência e cria as bases
+     * de permissões, metadata, audit log e contadores.
+     */
     private synchronized boolean addHouseToFile(String house, String owner) {
         String now = LocalDateTime.now().format(TS_FORMAT);
         Map<String, Integer> counters = initialSectionCounters();
@@ -366,6 +449,9 @@ public class ServerCommandHandler {
         }
     }
 
+    /**
+     * Normaliza permissões: remove parênteses, espaços e duplicados.
+     */
     private String normalizePermissionValue(String raw) {
         if (raw == null) {
             return null;
@@ -401,6 +487,12 @@ public class ServerCommandHandler {
         return String.join(",", sections);
     }
 
+    /**
+     * Verifica se o utilizador tem acesso à casa.
+     *
+     * O owner tem sempre acesso. Outros utilizadores precisam de estar
+     * explicitamente listados nas permissões da casa.
+     */
     private boolean hasHouseAccess(String house, String user) {
         if (houses.containsKey(house) && user.equals(houses.get(house))) {
             return true;
@@ -409,6 +501,9 @@ public class ServerCommandHandler {
         return housePermissions != null && housePermissions.containsKey(user);
     }
 
+    /**
+     * Confirma se uma permissão concedida cobre a secção pedida.
+     */
     private boolean isAllowedSection(String granted, String requestedSection) {
         String normalizedGranted = normalizePermissionValue(granted);
         String normalizedRequested = normalizePermissionValue(requestedSection);
@@ -436,6 +531,9 @@ public class ServerCommandHandler {
         return true;
     }
 
+    /**
+     * Inferência simples da secção pelo nome do dispositivo.
+     */
     private String deviceSection(String deviceName) {
         if (deviceName == null || deviceName.isEmpty()) {
             return null;
@@ -443,6 +541,9 @@ public class ServerCommandHandler {
         return String.valueOf(Character.toUpperCase(deviceName.charAt(0)));
     }
 
+    /**
+     * Normaliza a secção para maiúscula e valida se é uma secção permitida.
+     */
     private String normalizeSectionName(String section) {
         if (section == null) {
             return null;
@@ -468,6 +569,9 @@ public class ServerCommandHandler {
         return null;
     }
 
+    /**
+     * Devolve as secções já usadas por dispositivos da casa.
+     */
     private Set<String> getExistingSections(String house) {
         Set<String> sections = new LinkedHashSet<>();
         Map<String, Integer> devices = deviceState.get(house);
@@ -488,6 +592,9 @@ public class ServerCommandHandler {
         return sections;
     }
 
+            /**
+             * Confirma se todas as secções pedidas existem realmente na casa.
+             */
     private boolean requestedSectionsExistInHouse(String house, String requestedSections) {
         String normalizedRequested = normalizePermissionValue(requestedSections);
         if (normalizedRequested == null) {
@@ -507,7 +614,10 @@ public class ServerCommandHandler {
     }
 
 
-    //Método CREATE
+    /**
+     * CREATE:
+     * cria a casa, atribui owner, regista permissões base e inicializa estado.
+     */
     private String createHouse(String user, String house) {
         if (houses.containsKey(house)) {
             return "NOK";
@@ -535,8 +645,10 @@ public class ServerCommandHandler {
         return "OK";
     }
 
-    
-    //Método ADD
+    /**
+     * ADD:
+     * adiciona um utilizador a uma casa numa ou mais secções.
+     */
     private String addHouse(String user, String userAdd, String house, String section) {
         if (!houses.containsKey(house)) {
             return "NOHM";
@@ -569,7 +681,10 @@ public class ServerCommandHandler {
     }
 
 
-    //Método RD (Registar)
+            /**
+             * RD:
+             * regista um novo dispositivo numa secção da casa e atualiza os contadores.
+             */
     private String registerDevice(String user, String house, String section) {
         if (!houses.containsKey(house)) {
             return "NOHM";
@@ -601,8 +716,11 @@ public class ServerCommandHandler {
     }
 
 
-// ################FUNÇÕES AUXILIARES################
+// ################ FUNÇÕES AUXILIARES ################
 
+    /**
+     * Verifica permissões de acesso à casa/secção.
+     */
     private boolean checkPermissions(String house, String user, String section) {
         if (!houses.containsKey(house)) {
             System.out.println("A casa não existe.");
@@ -619,6 +737,9 @@ public class ServerCommandHandler {
         return isAllowedSection(housePermissions.get(user), section);
     }
 
+    /**
+     * Confirma se o utilizador pode aceder ao dispositivo com base na secção.
+     */
     private boolean hasDeviceAccess(String house, String user, String deviceName) {
         String section = getStoredDeviceSection(house, deviceName);
         if (section == null || section.isBlank()) {
@@ -627,6 +748,9 @@ public class ServerCommandHandler {
         return checkPermissions(house, user, section);
     }
 
+    /**
+     * Verifica se existe pelo menos um dispositivo acessível na casa.
+     */
     private boolean hasAnyAccessibleDevice(Map<String, Integer> devices, String house, String user) {
         if (devices == null || devices.isEmpty()) {
             return false;
@@ -639,6 +763,10 @@ public class ServerCommandHandler {
         return false;
     }
 
+    /**
+     * GETCERT:
+     * devolve o certificado X.509 de um utilizador em Base64.
+     */
     private String getCertCommand(String targetUser) {
         if (targetUser == null || targetUser.isBlank()) {
             return "NOK";
@@ -653,6 +781,10 @@ public class ServerCommandHandler {
         return "OK " + Base64.getEncoder().encodeToString(certBytes);
     }
 
+    /**
+     * PUTWKEY:
+     * guarda no servidor uma chave wrapped associada a uma casa/secção/recipiente.
+     */
     private String putWrappedKeyCommand(String requester, String house, String section, String recipient, String wrappedKeyB64) {
         if (!houses.containsKey(house)) {
             return "NOHM";
@@ -681,6 +813,10 @@ public class ServerCommandHandler {
         }
     }
 
+    /**
+     * GETWKEY:
+     * devolve a chave wrapped da secção para permitir ao cliente fazer unwrap local.
+     */
     private String getWrappedKeyCommand(String requester, String house, String section, String owner) {
         if (!houses.containsKey(house)) {
             return "NOHM";
@@ -703,6 +839,10 @@ public class ServerCommandHandler {
         return "OK " + Base64.getEncoder().encodeToString(wrappedBytes);
     }
 
+    /**
+     * EC inicial:
+     * valida permissões e devolve a chave wrapped que o cliente precisa para cifrar o valor.
+     */
     private String ecRequestCommand(String requester, String house, String device) {
         String normalizedDevice = device == null ? null : device.toUpperCase(Locale.ROOT);
         if (!houses.containsKey(house)) {
@@ -740,6 +880,10 @@ public class ServerCommandHandler {
         return "OK " + sectionName + " " + owner + " " + Base64.getEncoder().encodeToString(wrappedKey);
     }
 
+    /**
+     * EC final:
+     * recebe IV+ciphertext já cifrados pelo cliente e guarda o último comando.
+     */
     private String ecSendCommand(String requester, String house, String device, String ivB64, String ciphertextB64) {
         String normalizedDevice = device == null ? null : device.toUpperCase(Locale.ROOT);
         if (!houses.containsKey(house)) {
@@ -782,6 +926,9 @@ public class ServerCommandHandler {
         return "OK";
     }
 
+    /**
+     * Estrutura auxiliar para cada linha do RT.
+     */
     private static final class RtEntry {
         final String device;
         final String section;
@@ -796,6 +943,9 @@ public class ServerCommandHandler {
         }
     }
 
+    /**
+     * Estrutura auxiliar para cada linha do RH.
+     */
     private static final class RhEntry {
         final String timestamp;
         final String ivB64;
@@ -808,6 +958,9 @@ public class ServerCommandHandler {
         }
     }
 
+    /**
+     * Recolhe entradas RT acessíveis ao utilizador.
+     */
     private List<RtEntry> collectRtEntries(String house, String user) {
         List<RtEntry> entries = new ArrayList<>();
         Map<String, ServerFileManager.EncryptedLastCommand> encrypted = fileManager.loadEncryptedLastCommandsByHouse(house);
@@ -841,6 +994,10 @@ public class ServerCommandHandler {
         return entries;
     }
 
+    /**
+     * RT:
+     * valida o pedido, confirma existência de chaves e devolve OK antes do envio do ficheiro.
+     */
     public String RT(String house, String user) {
         if (!houses.containsKey(house)) {
             return "NOHM";
@@ -869,6 +1026,9 @@ public class ServerCommandHandler {
         return "OK";
     }
 
+    /**
+     * Constrói e envia o ficheiro RT encriptado ao cliente.
+     */
     public void RT_sendFile(String house, String user) {
         List<RtEntry> entries = collectRtEntries(house, user);
         String owner = houses.get(house);
@@ -917,6 +1077,9 @@ public class ServerCommandHandler {
         }
     }
 
+    /**
+     * Recolhe entradas RH do histórico de um dispositivo.
+     */
     private List<RhEntry> collectRhEntries(String house, String device) {
         List<RhEntry> entries = new ArrayList<>();
         Path logPath = getDeviceLogPath(house, device);
@@ -957,6 +1120,10 @@ public class ServerCommandHandler {
         return entries;
     }
 
+    /**
+     * RH:
+     * valida acesso ao histórico e garante que existe chave wrapped disponível.
+     */
     public String RH(String house, String user, String device) {
         String normalizedDevice = device == null ? null : device.toUpperCase(Locale.ROOT);
         if (!houses.containsKey(house)) {
@@ -993,6 +1160,9 @@ public class ServerCommandHandler {
         return "OK";
     }
 
+    /**
+     * Envia o ficheiro RH encriptado ao cliente.
+     */
     public void RH_sendFile(String house, String user, String device) {
         String normalizedDevice = device == null ? null : device.toUpperCase(Locale.ROOT);
         String section = getStoredDeviceSection(house, normalizedDevice);
@@ -1029,19 +1199,25 @@ public class ServerCommandHandler {
         }
     }
 
-//////////////////////////FUNÇÕES AUXILIARES/////////////////////////////////////////
+////////////////////////// FUNÇÕES AUXILIARES //////////////////////////
 
-
+    /**
+     * Despachador principal de comandos recebidos do cliente.
+     *
+     * Interpreta o texto, valida aridade e encaminha para o método correto.
+     */
     public String handleCommand(String cmd, String user) {
         if (cmd == null || cmd.trim().isEmpty()) {
             return "ERRO: Não colocou o comando!";
         }
 
         String[] parts = cmd.trim().split("\\s+");
+        // Debug auxiliar para inspecionar o parsing em desenvolvimento.
         System.out.println(Arrays.toString(parts));
         System.out.println(parts.length);
         String comando = parts[0].toUpperCase();
-    
+
+        // Cada case valida o formato e delega para a lógica específica.
         switch (comando) {
             case "GETCERT":
                 if (parts.length != 2) {
@@ -1118,7 +1294,11 @@ public class ServerCommandHandler {
         }
     }
 
-    //Lists the houses that the user has access to, and if a house is specified, lists the devices in that house that the user has access to, with their current state.
+    /**
+     * LS:
+     * sem argumento lista casas acessíveis; com casa lista os dispositivos
+     * acessíveis dessa casa.
+     */
     private String lsCommand(String user, String house) {
         if (house != null) {
             if (!houses.containsKey(house)) {

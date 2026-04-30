@@ -1,8 +1,8 @@
 // ##############################################################
-//           Autores:                Numero Aluno:              # 
-//        - Omeir Haroon               61810                    # 
-//        - Isa David                  61871                    # 
-//        - Diogo Roque                61857                    # 
+//           Autores:                Numero Aluno:              #
+//        - Omeir Haroon               61810                    #
+//        - Isa David                  61871                    #
+//        - Diogo Roque                61857                    #
 // ##############################################################
 
 package main.client;
@@ -30,7 +30,21 @@ import javax.crypto.SecretKey;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
+/**
+ * Cliente principal da aplicacao Sperta.
+ *
+ * Responsabilidades principais:
+ * 1) Validar argumentos de arranque.
+ * 2) Inicializar truststore/keystore.
+ * 3) Estabelecer ligacao TLS com o servidor.
+ * 4) Executar atestacao remota (nonce + hash do JAR).
+ * 5) Autenticar utilizador.
+ * 6) Processar comandos interativos.
+ * 7) Cifrar/decifrar payloads por secao (EC/RT/RH).
+ */
 public class SpertaClient {
+
+    // Texto de ajuda mostrado no login e no comando help.
     private static final String HELP_TEXT = String.join("\n",
             "Comandos disponiveis:",
             " - CREATE <hm> # Criar casa <hm> - utilizador e Owner",
@@ -41,37 +55,57 @@ public class SpertaClient {
             " - RH <hm> <d> # Receber o historico (ficheiro .csv) de comandos enviados ao dispositivo <d> da casa <hm> (com permissoes)",
             " - EXIT ou QUIT # Terminar a ligacao ao servidor e fechar o cliente",
             " - LS ou LS <hm> # Listar casas com acesso, ou listar dispositivos acessiveis de uma casa <hm>");
+
+    // Camada de rede para TLS + troca de objetos/ficheiros.
     private static ClientNetwork network;
+
+    // Keystore do utilizador (certificado e chave privada local do cliente).
     private static KeyStore userKeyStore;
+
+    // Truststore local onde guardamos certificados confiados (servidor e utilizadores).
     private static KeyStore trustStore;
+
+    // Caminho e password da truststore para persistencia local.
     private static String trustStorePath;
     private static char[] trustStorePassword;
+
+    // Password da keystore em formato char[] para operar com chave privada.
     private static char[] keyPasswordChars;
+
+    // Secoes permitidas por casa.
     private static final String[] HOUSE_SECTIONS = {"M", "G", "L", "P", "B", "E"};
+
+    // Cache local de certificados de utilizadores para evitar pedidos repetidos ao servidor.
     private final Map<String, Certificate> cachedCertificates = new LinkedHashMap<>();
 
-
+    /**
+     * Representa endereco do servidor apos validacao.
+     */
     public static class ServerAddress {
         String host;
         int port;
+
         ServerAddress(String host, int port) {
             this.host = host;
             this.port = port;
         }
     }
-    
 
+    /**
+     * Valida e interpreta o parametro serverAddress.
+     * Formatos aceites: host ou host:porto.
+     */
     public static ServerAddress validateServerAddress(String serverAddress) {
         String host;
-        int port = 22345; // porta default
-        
+        int port = 22345; // Porta por omissao.
+
         if (serverAddress.contains(":")) {
             String[] parts = serverAddress.split(":");
             if (parts.length != 2) {
-                System.err.println("Formato do serverAddress inválido. Use: <IP/hostname>[:Port]");
+                System.err.println("Formato do serverAddress invalido. Use: <IP/hostname>[:Port]");
                 System.exit(-1);
             }
-            
+
             try {
                 port = Integer.parseInt(parts[1]);
                 if (port < 1024 || port > 65535) {
@@ -79,7 +113,7 @@ public class SpertaClient {
                     System.exit(-1);
                 }
             } catch (NumberFormatException e) {
-                System.err.println("Número do porto inválido");
+                System.err.println("Numero do porto invalido");
                 System.exit(-1);
             }
 
@@ -87,15 +121,18 @@ public class SpertaClient {
         } else {
             host = serverAddress;
         }
-        
+
         if (host.isEmpty()) {
-            System.err.println("Hostname/IP não pode estar vazio.");
+            System.err.println("Hostname/IP nao pode estar vazio.");
             System.exit(-1);
         }
-        
+
         return new ServerAddress(host, port);
     }
 
+    /**
+     * Resolve caminho para absoluto e impede path traversal fora da pasta de trabalho.
+     */
     @SuppressWarnings("java:S2083")
     private static Path resolveValidatedFilePath(String rawPath, String label) {
         if (rawPath == null || rawPath.isBlank()) {
@@ -106,7 +143,7 @@ public class SpertaClient {
         Path candidate = Paths.get(rawPath);
         Path resolved = (candidate.isAbsolute() ? candidate : baseDir.resolve(candidate)).normalize().toAbsolutePath();
 
-        // Prevent path traversal outside the expected working tree.
+        // Bloqueia escapes do diretorio base (../../...).
         if (!resolved.startsWith(baseDir)) {
             throw new IllegalArgumentException(label + " fora da diretoria permitida.");
         }
@@ -114,6 +151,9 @@ public class SpertaClient {
         return resolved;
     }
 
+    /**
+     * Carrega keystore do utilizador para acesso ao certificado e chave privada.
+     */
     @SuppressWarnings({"java:S2083", "java:S3329"})
     private static KeyStore loadUserKeyStore(String keystorePath, String keystorePassword) {
         Path path;
@@ -126,28 +166,36 @@ public class SpertaClient {
         }
 
         if (!Files.isRegularFile(path) || !Files.isReadable(path)) {
-            System.err.println("Keystore do utilizador não encontrado ou sem permissões de leitura: " + path);
+            System.err.println("Keystore do utilizador nao encontrado ou sem permissoes de leitura: " + path);
             System.exit(-1);
         }
 
         try (FileInputStream fis = new FileInputStream(path.toFile())) {
             KeyStore keyStore = KeyStore.getInstance(KeyStore.getDefaultType());
-            keyStore.load(fis, keystorePassword.toCharArray()); // NOSONAR - password provided by local operator for keystore unlock
+            keyStore.load(fis, keystorePassword.toCharArray()); // NOSONAR - password local do operador
             return keyStore;
         } catch (Exception e) {
-            System.err.println("Não foi possível carregar a keystore do utilizador: " + e.getMessage());
+            System.err.println("Nao foi possivel carregar a keystore do utilizador: " + e.getMessage());
             System.exit(-1);
             return null;
         }
     }
 
-
+    /**
+     * Ponto de entrada da aplicacao cliente.
+     */
     public static void main(String[] args) {
-        if (args.length != 7){
+        // O cliente tem de arrancar com 7 argumentos porque precisa de saber:
+        // - onde está o servidor
+        // - que truststore usar para confiar no certificado do servidor
+        // - que keystore usar para identificar o utilizador localmente
+        // - qual o userId e password para a autenticação na aplicação
+        if (args.length != 7) {
             System.err.println("Uso: SpertaClient <serverAddress> <truststore> <password-truststore> <keystore> <password-keystore> <user-id> <password>");
             System.exit(-1);
         }
-        
+
+        // Leitura e separação dos argumentos de arranque.
         ServerAddress server = validateServerAddress(args[0]);
         String truststorePath = args[1];
         String truststorePassword = args[2];
@@ -155,43 +203,62 @@ public class SpertaClient {
         String keystorePassword = args[4];
         String userId = args[5];
         String password = args[6];
-        
+
+        // Proteção básica contra argumentos vazios, que dariam erros mais à frente.
         if (truststorePath.isEmpty() || truststorePassword.isEmpty() || keystorePath.isEmpty() || keystorePassword.isEmpty() || userId.isEmpty() || password.isEmpty()) {
-            System.err.println("Truststore, password-truststore, keystore, password-keystore, user-id e password não podem estar vazios.");
+            System.err.println("Truststore, password-truststore, keystore, password-keystore, user-id e password nao podem estar vazios.");
             System.exit(-1);
         }
 
-
-        if(initTruststore(truststorePath, truststorePassword)){
+        // A truststore é o ficheiro local que guarda certificados confiáveis.
+        // Aqui é carregada antes de qualquer ligação TLS para que o cliente
+        // saiba validar o certificado apresentado pelo servidor.
+        if (initTruststore(truststorePath, truststorePassword)) {
             System.out.println("Truststore carregado com sucesso.");
         } else {
             System.err.println("Erro ao carregar truststore.");
             System.exit(-1);
         }
 
+        // A keystore guarda o certificado e a chave privada do cliente.
+        // Esta chave privada é usada em operações como unwrap de chaves de secção.
         userKeyStore = loadUserKeyStore(keystorePath, keystorePassword);
         keyPasswordChars = keystorePassword.toCharArray();
+
+        // Cria a instância do cliente e a camada de rede TLS.
         SpertaClient client = new SpertaClient();
         network = new ClientNetwork();
+
+        // Estabelece ligação TLS segura com o servidor.
         if (!network.initClientNetwork(server.host, server.port, truststorePath, truststorePassword)) {
             System.exit(-1);
         }
+
+        // Só depois de TLS e configurações prontas é que o fluxo principal começa.
         client.run(userId, password);
     }
 
-
+    /**
+     * Inicializa truststore a partir de ficheiro local.
+     */
     @SuppressWarnings({"java:S2083", "java:S3329"})
-    public static boolean initTruststore(String path, String password){
+    public static boolean initTruststore(String path, String password) {
         try {
+            // Normaliza e valida o caminho para evitar path traversal.
             Path trustPath = resolveValidatedFilePath(path, "Truststore");
             if (!Files.isRegularFile(trustPath) || !Files.isReadable(trustPath)) {
-                System.err.println("Truststore não encontrado ou sem permissões de leitura: " + trustPath);
+                System.err.println("Truststore nao encontrado ou sem permissoes de leitura: " + trustPath);
                 return false;
             }
+
+            // Carrega o KeyStore do disco para memória.
             try (FileInputStream fis = new FileInputStream(trustPath.toFile())) {
                 trustStore = KeyStore.getInstance(KeyStore.getDefaultType());
-                trustStore.load(fis, password.toCharArray()); // NOSONAR - password provided by local operator for truststore unlock
+                trustStore.load(fis, password.toCharArray()); // NOSONAR - password local do operador
             }
+
+            // Guarda o caminho/password para permitir alterações persistentes
+            // como acrescentar certificados novos durante a execução.
             trustStorePath = trustPath.toString();
             trustStorePassword = password.toCharArray();
             return true;
@@ -201,8 +268,11 @@ public class SpertaClient {
         }
     }
 
-    public static boolean saveTrustStore(){
-        try(FileOutputStream fos = new FileOutputStream(trustStorePath)) {
+    /**
+     * Persiste truststore atual em disco.
+     */
+    public static boolean saveTrustStore() {
+        try (FileOutputStream fos = new FileOutputStream(trustStorePath)) {
             trustStore.store(fos, trustStorePassword);
             return true;
         } catch (Exception e) {
@@ -211,31 +281,44 @@ public class SpertaClient {
         }
     }
 
-
+    /**
+     * Traduz resposta de autenticacao do servidor para comportamento do cliente.
+     */
     private boolean isAuthenticatedResponse(String authResponse, String userId) {
         if (authResponse == null) {
             return false;
         }
 
+        // Se o servidor disser que é um utilizador novo, o cliente envia o seu
+        // certificado para o servidor o guardar e associar ao userId.
         if ("OK-NEW-USER".equals(authResponse)) {
             return sendClientCertificate(userId);
         }
 
+        // Se o utilizador já existir, tentamos garantir que o certificado dele
+        // está disponível localmente para operações futuras de cifragem/partilha.
         if ("OK-USER".equals(authResponse)) {
-            fetchCertificateFromServer(userId); // best-effort pre-load into truststore
+            fetchCertificateFromServer(userId); // best-effort
             return true;
         }
 
         return false;
     }
 
-    private boolean authenticate(Scanner sc, String userId, String password){
+    /**
+     * Processo de autenticacao por userId/password.
+     */
+    private boolean authenticate(Scanner sc, String userId, String password) {
+        // O protocolo começa sempre com envio do userId e da password.
+        // O servidor responde depois com o estado da autenticação.
         network.send(userId);
         network.send(password);
 
         String authResponse = (String) network.receive();
         System.out.println("Servidor: " + authResponse);
 
+        // Se a password estiver errada, o cliente dá uma segunda oportunidade.
+        // Isto evita terminar logo a sessão por um simples erro de digitação.
         if ("WRONG-PWD".equals(authResponse)) {
             System.out.print("Escreva aqui a password correta: ");
             password = sc.nextLine();
@@ -245,40 +328,51 @@ public class SpertaClient {
             System.out.println("Servidor: " + authResponse);
         }
 
+        // Quando a autenticação fica válida, o cliente mostra a ajuda inicial
+        // e avança para a fase de comandos interativos.
         if (isAuthenticatedResponse(authResponse, userId)) {
             System.out.println("Conectado a main.server!");
             System.out.println(HELP_TEXT);
             return true;
         }
 
+        // Mensagens específicas para tornar os erros mais claros ao utilizador.
         if ("WRONG-PWD".equals(authResponse)) {
             System.out.println("Password Errada!");
         } else if ("USER-ALREADY-CONNECTED".equals(authResponse)) {
-            System.out.println("Este utilizador já está ligado noutra sessão.");
+            System.out.println("Este utilizador ja esta ligado noutra sessao.");
         } else {
-            System.out.println("A Autenticação falhou: " + authResponse);
+            System.out.println("A Autenticacao falhou: " + authResponse);
         }
 
         return false;
     }
 
-    private void commandLoop(Scanner sc, String userId){
+    /**
+     * Ciclo interativo de comandos apos autenticacao.
+     */
+    private void commandLoop(Scanner sc, String userId) {
         boolean running = true;
 
         while (running) {
+            // O loop continua até o utilizador escrever exit/quit.
             System.out.print("Insere aqui o comando: ");
             System.out.flush();
             String command = sc.nextLine();
 
-            if (command.equalsIgnoreCase("help")){
+            // Comando de ajuda local, sem ir ao servidor.
+            if (command.equalsIgnoreCase("help")) {
                 System.out.println(HELP_TEXT);
+            // Saída limpa da aplicação.
             } else if (command.equalsIgnoreCase("exit") || command.equalsIgnoreCase("quit")) {
                 running = false;
                 System.out.println("A desconectar...");
             } else if (!command.trim().isEmpty()) {
+                // Divide o comando em partes para perceber o nome e argumentos.
                 String[] parts = command.trim().split("\\s+");
                 String commandName = parts[0].toUpperCase();
 
+                // EC é especial: o valor tem de ser cifrado no cliente antes do envio.
                 if ("EC".equals(commandName)) {
                     if (parts.length != 4) {
                         System.out.println("ERRO: O correto e: EC <hm> <d> <int>");
@@ -288,6 +382,7 @@ public class SpertaClient {
                     continue;
                 }
 
+                // Outros comandos seguem o fluxo simples: envia -> recebe resposta.
                 network.send(command);
 
                 Object responseObj = network.receive();
@@ -296,6 +391,8 @@ public class SpertaClient {
                     continue;
                 }
 
+                // RT devolve um payload de estado encriptado que o cliente guarda
+                // primeiro em disco para depois o processar localmente.
                 if ("OK".equals(response) && "RT".equals(commandName) && parts.length == 2) {
                     String house = parts[1];
                     Path encryptedOut = Paths.get("client_data", userId, "status_" + house + ".enc");
@@ -311,6 +408,7 @@ public class SpertaClient {
                     } else {
                         System.out.println("Erro ao receber ficheiro RT.");
                     }
+                // RH é semelhante ao RT, mas produz um CSV de histórico por dispositivo.
                 } else if ("OK".equals(response) && "RH".equals(commandName) && parts.length == 3) {
                     String house = parts[1];
                     String device = parts[2].toUpperCase();
@@ -328,15 +426,18 @@ public class SpertaClient {
                         System.out.println("Erro ao receber ficheiro RH.");
                     }
                 } else {
+                    // Nos restantes casos, a resposta é apenas textual.
                     System.out.println(response);
                 }
 
+                // Depois de CREATE, o owner gera/publica a chave de cada secção da casa.
                 if ("OK".equals(response) && "CREATE".equals(commandName) && parts.length == 2) {
                     if (!bootstrapOwnerSectionKeys(parts[1], userId)) {
                         System.out.println("Aviso: falha ao publicar uma ou mais chaves de secao apos CREATE.");
                     }
                 }
 
+                // Depois de ADD, o owner partilha com o novo utilizador as chaves das secções a que ele passa a ter acesso.
                 if ("OK".equals(response) && "ADD".equals(commandName) && parts.length == 4) {
                     String targetUser = parts[1];
                     String house = parts[2];
@@ -358,6 +459,9 @@ public class SpertaClient {
         }
     }
 
+    /**
+     * Normaliza secao para 1 letra maiuscula e valida contra lista permitida.
+     */
     private String normalizeSectionName(String section) {
         if (section == null) {
             return null;
@@ -374,42 +478,57 @@ public class SpertaClient {
         return null;
     }
 
+    /**
+     * Carrega chave privada do utilizador a partir da keystore local.
+     */
     @SuppressWarnings({"java:S2083", "java:S3329"})
     private PrivateKey loadUserPrivateKey(String userId) throws Exception {
         String alias = resolveCertificateAlias(userId);
         if (alias == null) {
             return null;
         }
-        Key key = userKeyStore.getKey(alias, keyPasswordChars); // NOSONAR - alias/password come from local keystore configuration
+        Key key = userKeyStore.getKey(alias, keyPasswordChars); // NOSONAR - dados locais confiados
         if (key instanceof PrivateKey privateKey) {
             return privateKey;
         }
         return null;
     }
 
+    /**
+     * Gera chave simetrica AES-128 para uma secao.
+     */
     private SecretKey generateSectionKey() throws Exception {
         KeyGenerator keyGenerator = KeyGenerator.getInstance("AES");
         keyGenerator.init(128);
         return keyGenerator.generateKey();
     }
 
+    /**
+     * Envolve (wrap) chave de secao com chave publica de um certificado destino.
+     */
     @SuppressWarnings("java:S5542")
     private byte[] wrapSectionKeyForCertificate(SecretKey sectionKey, Certificate cert) throws Exception {
-        // Compatibilidade de protocolo: servidor e cliente usam o mesmo esquema de wrapping.
+        // Compatibilidade de protocolo: manter esquema existente.
         Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
         cipher.init(Cipher.ENCRYPT_MODE, cert.getPublicKey());
         return cipher.doFinal(sectionKey.getEncoded());
     }
 
+    /**
+     * Desfaz wrap de chave de secao com chave privada local.
+     */
     @SuppressWarnings("java:S5542")
     private SecretKey unwrapSectionKey(byte[] wrappedKey, PrivateKey privateKey) throws Exception {
-        // Compatibilidade de protocolo: servidor e cliente usam o mesmo esquema de wrapping.
+        // Compatibilidade de protocolo: manter esquema existente.
         Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
         cipher.init(Cipher.DECRYPT_MODE, privateKey);
         byte[] rawKey = cipher.doFinal(wrappedKey);
         return new SecretKeySpec(rawKey, "AES");
     }
 
+    /**
+     * Publica chave de secao wrapped no servidor para um destinatario.
+     */
     @SuppressWarnings("java:S3329")
     private boolean putWrappedSectionKey(String house, String section, String recipient, byte[] wrappedKeyBytes) {
         String payloadB64 = Base64.getEncoder().encodeToString(wrappedKeyBytes);
@@ -418,6 +537,9 @@ public class SpertaClient {
         return responseObj instanceof String response && "OK".equals(response);
     }
 
+    /**
+     * Pede ao servidor chave wrapped de uma secao para um owner.
+     */
     private byte[] getWrappedSectionKey(String house, String section, String owner) {
         network.send("GETWKEY " + house + " " + section + " " + owner);
         Object responseObj = network.receive();
@@ -435,6 +557,10 @@ public class SpertaClient {
         }
     }
 
+    /**
+     * Obtem certificado de utilizador, preferindo cache/truststore local e
+     * fazendo fallback para GETCERT no servidor.
+     */
     private Certificate fetchCertificateFromServer(String user) {
         if (cachedCertificates.containsKey(user)) {
             return cachedCertificates.get(user);
@@ -463,15 +589,19 @@ public class SpertaClient {
             CertificateFactory cf = CertificateFactory.getInstance("X.509");
             Certificate cert = cf.generateCertificate(new ByteArrayInputStream(certBytes));
 
+            // Guarda em cache + truststore para futuras execucoes.
             cachedCertificates.put(user, cert);
             trustStore.setCertificateEntry(user, cert);
-            if(!saveTrustStore()) return null;
+            if (!saveTrustStore()) return null;
             return cert;
         } catch (Exception e) {
             return null;
         }
     }
 
+    /**
+     * Apos CREATE, owner gera e publica chaves para todas as secoes da casa.
+     */
     private boolean bootstrapOwnerSectionKeys(String house, String userId) {
         try {
             String alias = resolveCertificateAlias(userId);
@@ -496,6 +626,13 @@ public class SpertaClient {
         }
     }
 
+    /**
+     * Partilha chave de secao de owner para targetUser:
+     * 1) obtem wrapped para owner
+     * 2) unwrap com private key do owner
+     * 3) wrap com cert do target
+     * 4) publica no servidor
+     */
     private boolean shareSectionKeyWithUser(String house, String section, String ownerUser, String targetUser) {
         try {
             byte[] ownerWrappedKey = getWrappedSectionKey(house, section, ownerUser);
@@ -521,9 +658,12 @@ public class SpertaClient {
         }
     }
 
+    /**
+     * Cifra valor inteiro de EC com AES/GCM e devolve [ivB64, ciphertextB64].
+     */
     private String[] encryptEcValue(int value, SecretKey sectionKey) throws Exception {
         byte[] iv = new byte[12];
-        new SecureRandom().nextBytes(iv);
+        new SecureRandom().nextBytes(iv); // IV unico por mensagem.
 
         Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
         cipher.init(Cipher.ENCRYPT_MODE, sectionKey, new GCMParameterSpec(128, iv));
@@ -535,6 +675,9 @@ public class SpertaClient {
         };
     }
 
+    /**
+     * Decifra payload EC (ivB64 + ciphertextB64) com chave de secao.
+     */
     private String decryptEcValue(String ivB64, String ciphertextB64, SecretKey sectionKey) throws Exception {
         byte[] iv = Base64.getDecoder().decode(ivB64);
         byte[] ciphertext = Base64.getDecoder().decode(ciphertextB64);
@@ -545,6 +688,9 @@ public class SpertaClient {
         return new String(plain, StandardCharsets.UTF_8).trim();
     }
 
+    /**
+     * Resolve chave de secao usando cache local e wrapped recebido.
+     */
     private SecretKey resolveSectionKey(String section, String wrappedB64, Map<String, SecretKey> keyCache, PrivateKey privateKey) throws Exception {
         SecretKey cached = keyCache.get(section);
         if (cached != null) {
@@ -559,6 +705,9 @@ public class SpertaClient {
         return sectionKey;
     }
 
+    /**
+     * Processa ficheiro RT encriptado, decifra por secao e grava texto plano.
+     */
     private boolean processRtPayload(Path encryptedPath, Path plainOut, String userId, String house) {
         try {
             List<String> lines = Files.readAllLines(encryptedPath, StandardCharsets.UTF_8);
@@ -577,11 +726,14 @@ public class SpertaClient {
                 }
 
                 String[] parts = line.split("\\s+");
+
+                // Linhas KEY: mapeiam secao -> wrappedKey.
                 if (parts.length >= 3 && "KEY".equalsIgnoreCase(parts[0])) {
                     wrappedKeys.put(parts[1], parts[2]);
                     continue;
                 }
 
+                // Linhas DATA: contem device, secao, iv e ciphertext.
                 if (parts.length == 5 && "DATA".equalsIgnoreCase(parts[0])) {
                     String device = parts[1];
                     String section = parts[2];
@@ -603,13 +755,16 @@ public class SpertaClient {
                 Files.createDirectories(parent);
             }
             Files.write(plainOut, outputLines, StandardCharsets.UTF_8);
-            Files.deleteIfExists(encryptedPath);
+            Files.deleteIfExists(encryptedPath); // Limpeza do artefacto cifrado local.
             return true;
         } catch (Exception e) {
             return false;
         }
     }
 
+    /**
+     * Processa ficheiro RH encriptado, decifra historico e grava CSV plano.
+     */
     private boolean processRhPayload(Path encryptedPath, Path plainOut, String userId, String house, String device) {
         try {
             List<String> lines = Files.readAllLines(encryptedPath, StandardCharsets.UTF_8);
@@ -624,12 +779,15 @@ public class SpertaClient {
                     continue;
                 }
                 String[] parts = line.split("\\s+");
+
+                // Linha KEY contem secao + chave wrapped.
                 if (parts.length >= 3 && "KEY".equalsIgnoreCase(parts[0])) {
                     section = parts[1];
                     wrappedB64 = parts[2];
                     continue;
                 }
 
+                // Linha H contem timestamp + iv + ciphertext.
                 if (parts.length == 4 && "H".equalsIgnoreCase(parts[0])) {
                     if (section == null || wrappedB64 == null || wrappedB64.isBlank()) {
                         return false;
@@ -649,13 +807,21 @@ public class SpertaClient {
                 Files.createDirectories(parent);
             }
             Files.write(plainOut, outputLines, StandardCharsets.UTF_8);
-            Files.deleteIfExists(encryptedPath);
+            Files.deleteIfExists(encryptedPath); // Limpeza do artefacto cifrado local.
             return true;
         } catch (Exception e) {
             return false;
         }
     }
 
+    /**
+     * Fluxo EC seguro:
+     * 1) valida valor
+     * 2) pede wrapped key ao servidor
+     * 3) unwrap local com private key
+     * 4) cifra valor (AES/GCM)
+     * 5) envia payload cifrado
+     */
     private void handleEcCommand(String userId, String house, String device, String valueStr) {
         int value;
         try {
@@ -665,12 +831,15 @@ public class SpertaClient {
             return;
         }
 
+        // Limite de negocio definido no protocolo.
         if (value < 0 || value > 600) {
             System.out.println("NOK");
             return;
         }
 
         String normalizedDevice = device.toUpperCase();
+
+        // Pedido inicial para obter contexto e chave wrapped.
         network.send("EC " + house + " " + normalizedDevice);
         Object reqResponseObj = network.receive();
         if (!(reqResponseObj instanceof String reqResponse)) {
@@ -701,6 +870,7 @@ public class SpertaClient {
             SecretKey sectionKey = unwrapSectionKey(wrappedKey, requesterPrivateKey);
             String[] encryptedPayload = encryptEcValue(value, sectionKey);
 
+            // Envio final do comando com valor cifrado.
             network.send("EC " + house + " " + normalizedDevice + " " + encryptedPayload[0] + " " + encryptedPayload[1]);
             Object sendResponseObj = network.receive();
             if (sendResponseObj instanceof String sendResponse) {
@@ -713,8 +883,12 @@ public class SpertaClient {
         }
     }
 
+    /**
+     * Resolve caminho do JAR do cliente para atestacao.
+     */
     private Path resolveClientJarPath() throws IOException {
         try {
+            // Tenta primeiro localizar o artefacto em execucao.
             Path clientArtifact = Paths.get(
                     SpertaClient.class.getProtectionDomain().getCodeSource().getLocation().toURI())
                     .toAbsolutePath()
@@ -724,18 +898,22 @@ public class SpertaClient {
                 return clientArtifact;
             }
 
+            // Fallback para dist/SpertaClient.jar no projeto.
             Path projectRoot = Paths.get(System.getProperty("user.dir")).toAbsolutePath().normalize();
             Path fallbackJar = projectRoot.resolve("dist").resolve("SpertaClient.jar").toAbsolutePath().normalize();
             if (Files.isRegularFile(fallbackJar)) {
                 return fallbackJar;
             }
 
-            throw new IOException("A atestação remota requer um ficheiro SpertaClient.jar disponível em execução ou em dist/.");
+            throw new IOException("A atestacao remota requer um ficheiro SpertaClient.jar disponivel em execucao ou em dist/.");
         } catch (Exception e) {
-            throw new IOException("Não foi possível localizar o ficheiro SpertaClient.jar em execução.", e);
+            throw new IOException("Nao foi possivel localizar o ficheiro SpertaClient.jar em execucao.", e);
         }
     }
 
+    /**
+     * Calcula prova de atestacao: SHA-256(nonce || bytesDoJar).
+     */
     private byte[] calculateAttestationHash(long nonce, Path clientJarPath) throws IOException {
         try {
             byte[] jarBytes = Files.readAllBytes(clientJarPath);
@@ -744,11 +922,14 @@ public class SpertaClient {
             digest.update(jarBytes);
             return digest.digest();
         } catch (Exception e) {
-            throw new IOException("Não foi possível calcular a prova de atestação do cliente.", e);
+            throw new IOException("Nao foi possivel calcular a prova de atestacao do cliente.", e);
         }
     }
 
-    private boolean attestation() throws IOException{
+    /**
+     * Executa protocolo de atestacao remota com o servidor.
+     */
+    private boolean attestation() throws IOException {
         Object nonceObj = network.receive();
         if (!(nonceObj instanceof Long nonce)) {
             System.out.println("ATTESTATION FAILED");
@@ -769,8 +950,12 @@ public class SpertaClient {
         return false;
     }
 
+    /**
+     * Fluxo de vida principal do cliente ja conectado por TLS.
+     */
     public void run(String userId, String password) {
         try (Scanner sc = new Scanner(System.in)) {
+            // Hook para garantir fecho da ligacao em CTRL+C.
             Runtime.getRuntime().addShutdownHook(new Thread(new Runnable() {
                 @Override
                 public void run() {
@@ -778,10 +963,15 @@ public class SpertaClient {
                     network.closeClientNetwork();
                 }
             }));
-            if(!attestation()){
+
+            // 1) Atestacao
+            if (!attestation()) {
                 System.exit(-1);
             }
+
+            // 2) Autenticacao
             if (authenticate(sc, userId, password)) {
+                // 3) Interacao por comandos
                 commandLoop(sc, userId);
             }
         } catch (IOException e) {
@@ -789,6 +979,10 @@ public class SpertaClient {
         }
     }
 
+    /**
+     * Resolve alias de certificado na keystore:
+     * tenta userId primeiro, caso contrario escolhe primeiro alias com certificado.
+     */
     private String resolveCertificateAlias(String userId) throws Exception {
         if (userId != null && !userId.isBlank() && userKeyStore.containsAlias(userId)
                 && userKeyStore.getCertificate(userId) != null) {
@@ -805,30 +999,38 @@ public class SpertaClient {
         return null;
     }
 
+    /**
+     * Envia certificado do cliente para servidor no onboarding de novo utilizador.
+     */
     private boolean sendClientCertificate(String userId) {
         try {
+            // O servidor confirma primeiro que quer receber o certificado.
             Object reqObj = network.receive();
             if (!(reqObj instanceof String req) || !"REQ-CERT".equals(req)) {
                 System.out.println("Resposta inesperada do servidor durante upload do certificado: " + reqObj);
                 return false;
             }
 
+            // Resolve qual o alias correto na keystore local.
             String alias = resolveCertificateAlias(userId);
             if (alias == null) {
                 network.send(new byte[0]);
-                System.out.println("Não foi encontrado nenhum certificado na keystore do cliente.");
+                System.out.println("Nao foi encontrado nenhum certificado na keystore do cliente.");
                 return false;
             }
 
+            // Extrai o certificado público que será enviado ao servidor.
             Certificate cert = userKeyStore.getCertificate(alias);
             if (cert == null) {
                 network.send(new byte[0]);
                 return false;
             }
 
+            // Envia o certificado em bytes codificados ASN.1/X.509.
             byte[] certBytes = cert.getEncoded();
             network.send(certBytes);
 
+            // O servidor confirma se o certificado foi guardado.
             Object responseObj = network.receive();
             if (responseObj instanceof String response && "OK-CERT-STORED".equals(response)) {
                 System.out.println("Certificado do cliente enviado com sucesso.");
@@ -841,5 +1043,4 @@ public class SpertaClient {
         }
         return false;
     }
-
 }
